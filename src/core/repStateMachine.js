@@ -286,6 +286,10 @@ export class RepStateMachine {
 
       rep.errors = this.errorTracker.getConfirmedErrors();
       rep.valid = !rep.errors.some((error) => error.severity === 'critical');
+      // Reset now (not just at the next rep's start) so the skeleton and
+      // cue banner go back to clean the instant the rep ends, instead of
+      // staying red/amber while the person is just standing between reps.
+      this.errorTracker.reset();
     }
 
     this.repCount += 1;

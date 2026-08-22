@@ -2,15 +2,31 @@ import { useEffect, useRef, useState } from 'react';
 import './CameraView.css';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useRepCounter } from '../hooks/useRepCounter';
-import { drawSkeleton, drawLandmarks } from '../core/drawing';
+import { drawSkeleton, drawLandmarks, SEVERITY_COLORS } from '../core/drawing';
 import { LandmarkSmoother } from '../core/smoothing';
 import { getSquatMetrics } from '../core/exercises/squat';
+import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
+import { buildFeedbackState, pickPrimaryError } from '../core/feedbackState';
 import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
 import RepCounterOverlay from './RepCounterOverlay';
-import ActiveErrorBanner from './ActiveErrorBanner';
+import CueBanner from './CueBanner';
+import RepFlash from './RepFlash';
+import StateIndicator from './StateIndicator';
+import DepthBar from './DepthBar';
 
 const FPS_WINDOW_SIZE = 30;
+
+const { depthBarStandingAngle, depthBarDeepAngle, depthMaxKneeAngle } = SQUAT_CONFIG.thresholds;
+const DEPTH_MARKER_PERCENT = clamp(
+  (depthBarStandingAngle - depthMaxKneeAngle) / (depthBarStandingAngle - depthBarDeepAngle),
+  0,
+  1
+);
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
 // Status of the camera: 'loading' | 'ready' | 'denied' | 'not-found' | 'error'
 function CameraView() {
@@ -18,12 +34,17 @@ function CameraView() {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const rafIdRef = useRef(null);
+  // Updated directly from the detection loop (not via setState) because
+  // it changes essentially every frame — see DepthBar.jsx.
+  const depthFillRef = useRef(null);
 
   const [status, setStatus] = useState('loading');
   const [fps, setFps] = useState(0);
   const [detected, setDetected] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugMetrics, setDebugMetrics] = useState(null);
+  const [cue, setCue] = useState({ message: null, severity: null });
+  const [flash, setFlash] = useState(null);
   // Mirrors showDebug for the detection loop below to read without being
   // a dependency of that effect — depending on it directly would tear
   // down and recreate the LandmarkSmoother (losing its filter state, so
@@ -37,6 +58,16 @@ function CameraView() {
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
+
+  // Colors are defined once in core/drawing.js; publish them as CSS
+  // custom properties so the HUD's CSS-based elements (cue banner, depth
+  // bar, rep flash) stay in sync with the canvas skeleton automatically.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--color-good', SEVERITY_COLORS.good);
+    root.style.setProperty('--color-warning', SEVERITY_COLORS.warning);
+    root.style.setProperty('--color-critical', SEVERITY_COLORS.critical);
+  }, []);
 
   useEffect(() => {
     orientationRef.current = repCounter.orientation;
@@ -175,31 +206,65 @@ function CameraView() {
       let metrics = null;
 
       if (smoothedLandmarks && smoothedLandmarks.length > 0) {
-        // ---- MIRROR FIX (the only place this happens) ----
-        // The <canvas> has no CSS mirroring (only the <video> does), so
-        // MediaPipe's landmarks — given in unmirrored video space — must
-        // be flipped horizontally in code to line up with what the user
-        // sees mirrored on screen. Metrics below use the unmirrored
-        // smoothedLandmarks directly, since angles are unaffected by a
-        // horizontal flip and mirroring is purely a display concern.
-        const mirroredLandmarks = smoothedLandmarks.map((point) => ({
-          ...point,
-          x: 1 - point.x,
-        }));
-
-        drawSkeleton(ctx, mirroredLandmarks, canvas.width, canvas.height);
-        drawLandmarks(ctx, mirroredLandmarks, canvas.width, canvas.height);
-        setDetected(true);
-
         metrics = getSquatMetrics(smoothedLandmarks, canvas.width / canvas.height);
+        setDetected(true);
       } else {
         setDetected(false);
       }
 
       // Fed every frame — including null metrics — so the state machine's
       // "abandon a rep if metrics go missing for too long" timer can run
-      // even while no pose is detected.
-      repCounter.update(metrics, now);
+      // even while no pose is detected. Read its return value directly
+      // (rather than repCounter's React state) so the skeleton colors and
+      // rep flash react on THIS frame, not one render behind.
+      const result = repCounter.update(metrics, now);
+
+      if (smoothedLandmarks && smoothedLandmarks.length > 0) {
+        const feedback = buildFeedbackState(result.activeErrors, SQUAT_CONFIG);
+
+        // ---- MIRROR FIX (the only place this happens) ----
+        // The <canvas> has no CSS mirroring (only the <video> does), so
+        // MediaPipe's landmarks — given in unmirrored video space — must
+        // be flipped horizontally in code to line up with what the user
+        // sees mirrored on screen. Metrics/feedback above use the
+        // unmirrored smoothedLandmarks/segment indices directly, since
+        // this is purely a display concern.
+        const mirroredLandmarks = smoothedLandmarks.map((point) => ({
+          ...point,
+          x: 1 - point.x,
+        }));
+
+        drawSkeleton(ctx, mirroredLandmarks, canvas.width, canvas.height, {
+          segmentColors: feedback.segmentColors,
+        });
+        drawLandmarks(ctx, mirroredLandmarks, canvas.width, canvas.height, {
+          jointColors: feedback.jointColors,
+        });
+
+        setCue({ message: feedback.primaryMessage, severity: feedback.primarySeverity });
+      } else {
+        setCue({ message: null, severity: null });
+      }
+
+      // Depth bar fill: written straight to the DOM (no setState) since
+      // it changes almost every frame — see DepthBar.jsx for why.
+      if (metrics && depthFillRef.current) {
+        const depthPercent = clamp(
+          (depthBarStandingAngle - metrics.kneeAngleAvg) / (depthBarStandingAngle - depthBarDeepAngle),
+          0,
+          1
+        );
+        depthFillRef.current.style.height = `${depthPercent * 100}%`;
+        depthFillRef.current.style.backgroundColor =
+          depthPercent >= DEPTH_MARKER_PERCENT ? SEVERITY_COLORS.good : '#94a3b8';
+      }
+
+      if (result.justCompletedRep) {
+        const rep = result.justCompletedRep;
+        const failure = rep.valid ? null : pickPrimaryError(rep.errors, SQUAT_CONFIG.errorPriority);
+        setFlash({ id: `${rep.repNumber}-${rep.endTime}`, valid: rep.valid, reason: failure?.message ?? null });
+      }
+
       if (showDebugRef.current) setDebugMetrics(metrics);
 
       rafIdRef.current = requestAnimationFrame(loop);
@@ -259,13 +324,18 @@ function CameraView() {
           <RepCounterOverlay
             validReps={repCounter.validReps}
             totalAttempts={repCounter.totalAttempts}
-            state={repCounter.state}
-            orientation={repCounter.orientation}
+            pulseKey={flash && flash.valid ? flash.id : null}
             onReset={repCounter.reset}
           />
         )}
 
-        {status === 'ready' && <ActiveErrorBanner activeErrors={repCounter.activeErrors} />}
+        {status === 'ready' && <CueBanner message={cue.message} severity={cue.severity} />}
+
+        {status === 'ready' && <RepFlash flash={flash} />}
+
+        {status === 'ready' && <DepthBar ref={depthFillRef} markerPercent={DEPTH_MARKER_PERCENT} />}
+
+        {status === 'ready' && <StateIndicator state={repCounter.state} orientation={repCounter.orientation} />}
 
         {status === 'ready' && showDebug && (
           <DebugPanel metrics={debugMetrics} reps={repCounter.reps} activeErrors={repCounter.activeErrors} />

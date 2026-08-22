@@ -1,20 +1,17 @@
 import './RepCounterOverlay.css';
 
-// Large, always-visible valid/attempted rep counts + current state name.
-// The state label is mainly for debugging the state machine while
-// squatting in front of the camera, where the 'd' debug panel is
-// awkward to read at a glance. Orientation is the manual front/side
-// toggle ('o') standing in for Phase 7's real camera-angle detection.
-function RepCounterOverlay({ validReps, totalAttempts, state, orientation, onReset }) {
+// Big, always-visible rep counter: validReps is the headline number,
+// totalAttempts sits smaller beneath it. pulseKey changes only when a
+// VALID rep just completed (see CameraView.jsx) — keying the number span
+// on it remounts the element and replays the scale-up CSS animation,
+// including for reps that finish back-to-back.
+function RepCounterOverlay({ validReps, totalAttempts, pulseKey, onReset }) {
   return (
     <div className="rep-counter-overlay">
-      <div className="rep-count">
-        {validReps} / {totalAttempts}
+      <div key={pulseKey ?? 'idle'} className={`rep-count${pulseKey ? ' rep-count-pulse' : ''}`}>
+        {validReps}
       </div>
-      <div className="rep-count-label">Valid / Attempts</div>
-      <div className="rep-state">
-        {state} · {orientation} (o to toggle)
-      </div>
+      <div className="rep-count-attempts">{totalAttempts} attempts</div>
       <button className="rep-reset-button" onClick={onReset}>
         Reset
       </button>
