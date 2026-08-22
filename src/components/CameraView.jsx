@@ -8,6 +8,17 @@ import { LandmarkSmoother } from '../core/smoothing';
 import { getSquatMetrics } from '../core/exercises/squat';
 import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
 import { buildFeedbackState, pickPrimaryError } from '../core/feedbackState';
+import { APP_STATES } from '../core/appStateMachine';
+import {
+  SETUP_CHECKS_CONFIG,
+  checkFullBodyVisible,
+  checkWithinFrameBounds,
+  checkBodySize,
+  checkLighting,
+  runFramingChecks,
+  StabilityTracker,
+} from '../core/setupChecks';
+import { OrientationDetector, ORIENTATIONS } from '../core/orientationDetector';
 import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
 import RepCounterOverlay from './RepCounterOverlay';
@@ -16,9 +27,20 @@ import RepFlash from './RepFlash';
 import StateIndicator from './StateIndicator';
 import DepthBar from './DepthBar';
 import VoiceSettings from './VoiceSettings';
+import SetupFlow from './SetupFlow';
+import Countdown from './Countdown';
+import RepositionOverlay from './RepositionOverlay';
 
 const FPS_WINDOW_SIZE = 30;
 const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity: null };
+
+// How long framing must stay bad mid-set before the app pauses, and how
+// long it must stay good again before auto-resuming. Different numbers
+// on purpose: pausing should be conservative (don't interrupt a set over
+// one bad frame), but resuming can react a bit faster once the person is
+// visibly back in position.
+const PAUSE_THRESHOLD_MS = 2000;
+const RESUME_STABLE_MS = 800;
 
 const { depthBarStandingAngle, depthBarDeepAngle, depthMaxKneeAngle } = SQUAT_CONFIG.thresholds;
 const DEPTH_MARKER_PERCENT = clamp(
@@ -48,24 +70,48 @@ function CameraView() {
   const [debugMetrics, setDebugMetrics] = useState(null);
   const [cue, setCue] = useState({ message: null, severity: null });
   const [flash, setFlash] = useState(null);
-  // Mirrors showDebug for the detection loop below to read without being
+
+  // App-level flow: SETUP -> COUNTDOWN -> ACTIVE -> PAUSED -> COUNTDOWN -> ACTIVE...
+  const [appState, setAppState] = useState(APP_STATES.SETUP);
+  const [sessionConfig, setSessionConfig] = useState({ exercise: 'squat', orientation: 'front' });
+  const [liveSetupChecks, setLiveSetupChecks] = useState([]);
+  const [orientationResult, setOrientationResult] = useState({ orientation: ORIENTATIONS.AMBIGUOUS, confidence: 0 });
+  const [pauseReason, setPauseReason] = useState('');
+  const [resuming, setResuming] = useState(false);
+
+  // Mirrors appState for the detection loop below to read without being
   // a dependency of that effect — depending on it directly would tear
-  // down and recreate the LandmarkSmoother (losing its filter state, so
-  // values would jump) every time 'd' is pressed.
+  // down and recreate the LandmarkSmoother (losing its filter state) on
+  // every SETUP -> COUNTDOWN -> ACTIVE -> PAUSED transition. Written
+  // directly wherever appState is set (see transitionTo), rather than via
+  // a separate sync effect, so the loop never sees a stale value even for
+  // one extra frame.
+  const appStateRef = useRef(APP_STATES.SETUP);
+  // Mirrors showDebug for the same reason.
   const showDebugRef = useRef(false);
-  // Mirrors repCounter.orientation for the keydown handler below. The
-  // handler is registered once (mount-only effect), so reading
-  // repCounter.orientation directly inside it would always see its
-  // value from that first render — this ref stays current instead.
-  const orientationRef = useRef('front');
+  // Mid-set framing-monitor bookkeeping (see the ACTIVE/PAUSED branches
+  // in the loop below).
+  const pauseSinceRef = useRef(null);
+  const resumeOkSinceRef = useRef(null);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
   const speech = useSpeechFeedback();
+  // Created once (lazy initializer), never replaced — both hold a
+  // rolling window of recent frames, so they need to persist across
+  // renders the same way LandmarkSmoother does.
+  const [stabilityTracker] = useState(() => new StabilityTracker());
+  const [orientationDetector] = useState(() => new OrientationDetector());
+
+  const transitionTo = (nextState) => {
+    appStateRef.current = nextState;
+    setAppState(nextState);
+  };
 
   // Colors are defined once in core/drawing.js; publish them as CSS
   // custom properties so the HUD's CSS-based elements (cue banner, depth
-  // bar, rep flash) stay in sync with the canvas skeleton automatically.
+  // bar, rep flash, setup UI) stay in sync with the canvas skeleton
+  // automatically.
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--color-good', SEVERITY_COLORS.good);
@@ -74,28 +120,16 @@ function CameraView() {
   }, []);
 
   useEffect(() => {
-    orientationRef.current = repCounter.orientation;
-  }, [repCounter.orientation]);
-
-  useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key === 'd') {
         setShowDebug((prev) => {
           showDebugRef.current = !prev;
           return !prev;
         });
-      } else if (event.key === 'o') {
-        // Manual stand-in for Phase 7's real orientation detection — lets
-        // front-on-only checks (knee_valgus) and side-on-only checks
-        // (excessive_lean) both be tested before that exists.
-        const next = orientationRef.current === 'front' ? 'side' : 'front';
-        orientationRef.current = next;
-        repCounter.setOrientation(next);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keeps canvas.width/height (the actual pixel buffer) in sync with the
@@ -164,7 +198,10 @@ function CameraView() {
   }, []);
 
   // Pose detection + draw loop. Runs once the camera is ready and the
-  // model has finished loading.
+  // model has finished loading, all the way through setup, countdown,
+  // the active set, and any pauses — appStateRef decides what each frame
+  // actually does (see the branches below) without ever tearing down and
+  // recreating the smoother/trackers.
   useEffect(() => {
     if (status !== 'ready' || !landmarker) return;
 
@@ -206,78 +243,115 @@ function CameraView() {
       // just passes null through, and calling it unconditionally keeps
       // each filter's internal clock consistent frame to frame.
       const smoothedLandmarks = smoother.smooth(rawLandmarks, performance.now());
+      const hasPose = Boolean(smoothedLandmarks && smoothedLandmarks.length > 0);
+      setDetected(hasPose);
 
-      let metrics = null;
+      const currentAppState = appStateRef.current;
 
-      if (smoothedLandmarks && smoothedLandmarks.length > 0) {
-        metrics = getSquatMetrics(smoothedLandmarks, canvas.width / canvas.height);
-        setDetected(true);
-      } else {
-        setDetected(false);
+      if (currentAppState === APP_STATES.SETUP) {
+        const checks = [
+          checkFullBodyVisible(smoothedLandmarks, SETUP_CHECKS_CONFIG),
+          checkWithinFrameBounds(smoothedLandmarks, SETUP_CHECKS_CONFIG),
+          checkBodySize(smoothedLandmarks, SETUP_CHECKS_CONFIG),
+          stabilityTracker.check(smoothedLandmarks, now),
+          checkLighting(smoothedLandmarks, SETUP_CHECKS_CONFIG),
+        ];
+        setLiveSetupChecks(checks);
+        setOrientationResult(orientationDetector.update(smoothedLandmarks, canvas.width / canvas.height, now));
+
+        const firstFailing = checks.find((check) => !check.passed);
+        speech.announceSetupHint(firstFailing?.hint ?? null);
+      } else if (currentAppState === APP_STATES.ACTIVE) {
+        let metrics = null;
+        if (hasPose) metrics = getSquatMetrics(smoothedLandmarks, canvas.width / canvas.height);
+
+        const result = repCounter.update(metrics, now);
+        let feedback = EMPTY_FEEDBACK;
+
+        if (hasPose) {
+          feedback = buildFeedbackState(result.activeErrors, SQUAT_CONFIG);
+
+          // ---- MIRROR FIX (the only place this happens) ----
+          // The <canvas> has no CSS mirroring (only the <video> does), so
+          // MediaPipe's landmarks — given in unmirrored video space —
+          // must be flipped horizontally in code to line up with what
+          // the user sees mirrored on screen.
+          const mirroredLandmarks = smoothedLandmarks.map((point) => ({ ...point, x: 1 - point.x }));
+
+          drawSkeleton(ctx, mirroredLandmarks, canvas.width, canvas.height, { segmentColors: feedback.segmentColors });
+          drawLandmarks(ctx, mirroredLandmarks, canvas.width, canvas.height, { jointColors: feedback.jointColors });
+
+          setCue({ message: feedback.primaryMessage, severity: feedback.primarySeverity });
+        } else {
+          setCue({ message: null, severity: null });
+        }
+
+        speech.update(result.state, feedback);
+
+        // Depth bar fill: written straight to the DOM (no setState) since
+        // it changes almost every frame — see DepthBar.jsx for why.
+        if (metrics && depthFillRef.current) {
+          const depthPercent = clamp(
+            (depthBarStandingAngle - metrics.kneeAngleAvg) / (depthBarStandingAngle - depthBarDeepAngle),
+            0,
+            1
+          );
+          depthFillRef.current.style.height = `${depthPercent * 100}%`;
+          depthFillRef.current.style.backgroundColor =
+            depthPercent >= DEPTH_MARKER_PERCENT ? SEVERITY_COLORS.good : '#94a3b8';
+        }
+
+        if (result.justCompletedRep) {
+          const rep = result.justCompletedRep;
+          const failure = rep.valid ? null : pickPrimaryError(rep.errors, SQUAT_CONFIG.errorPriority);
+          setFlash({ id: `${rep.repNumber}-${rep.endTime}`, valid: rep.valid, reason: failure?.message ?? null });
+          speech.announceRep(result.state, rep, result.validReps);
+        }
+
+        if (showDebugRef.current) setDebugMetrics(metrics);
+
+        // Mid-set framing monitor: only the "can we trust this framing"
+        // checks apply here — stability doesn't, a squat is supposed to
+        // move. Sustained failure (not a single bad frame) pauses the set.
+        const framingChecks = runFramingChecks(smoothedLandmarks, SETUP_CHECKS_CONFIG);
+        const framingOk = framingChecks.every((check) => check.passed);
+
+        if (framingOk) {
+          pauseSinceRef.current = null;
+        } else {
+          if (pauseSinceRef.current === null) pauseSinceRef.current = now;
+          if (now - pauseSinceRef.current > PAUSE_THRESHOLD_MS) {
+            const failing = framingChecks.find((check) => !check.passed);
+            repCounter.abandonCurrentRep();
+            setPauseReason(failing?.hint ?? 'Reposition');
+            setResuming(false);
+            pauseSinceRef.current = null;
+            transitionTo(APP_STATES.PAUSED);
+          }
+        }
+      } else if (currentAppState === APP_STATES.PAUSED) {
+        if (showDebugRef.current) setDebugMetrics(null);
+
+        const framingChecks = runFramingChecks(smoothedLandmarks, SETUP_CHECKS_CONFIG);
+        const framingOk = framingChecks.every((check) => check.passed);
+
+        if (framingOk) {
+          if (resumeOkSinceRef.current === null) resumeOkSinceRef.current = now;
+          if (now - resumeOkSinceRef.current > RESUME_STABLE_MS) {
+            resumeOkSinceRef.current = null;
+            setResuming(true);
+            transitionTo(APP_STATES.COUNTDOWN);
+          }
+        } else {
+          resumeOkSinceRef.current = null;
+          const failing = framingChecks.find((check) => !check.passed);
+          const hint = failing?.hint ?? 'Reposition';
+          setPauseReason(hint);
+          speech.announceSetupHint(hint);
+        }
       }
-
-      // Fed every frame — including null metrics — so the state machine's
-      // "abandon a rep if metrics go missing for too long" timer can run
-      // even while no pose is detected. Read its return value directly
-      // (rather than repCounter's React state) so the skeleton colors and
-      // rep flash react on THIS frame, not one render behind.
-      const result = repCounter.update(metrics, now);
-
-      let feedback = EMPTY_FEEDBACK;
-
-      if (smoothedLandmarks && smoothedLandmarks.length > 0) {
-        feedback = buildFeedbackState(result.activeErrors, SQUAT_CONFIG);
-
-        // ---- MIRROR FIX (the only place this happens) ----
-        // The <canvas> has no CSS mirroring (only the <video> does), so
-        // MediaPipe's landmarks — given in unmirrored video space — must
-        // be flipped horizontally in code to line up with what the user
-        // sees mirrored on screen. Metrics/feedback above use the
-        // unmirrored smoothedLandmarks/segment indices directly, since
-        // this is purely a display concern.
-        const mirroredLandmarks = smoothedLandmarks.map((point) => ({
-          ...point,
-          x: 1 - point.x,
-        }));
-
-        drawSkeleton(ctx, mirroredLandmarks, canvas.width, canvas.height, {
-          segmentColors: feedback.segmentColors,
-        });
-        drawLandmarks(ctx, mirroredLandmarks, canvas.width, canvas.height, {
-          jointColors: feedback.jointColors,
-        });
-
-        setCue({ message: feedback.primaryMessage, severity: feedback.primarySeverity });
-      } else {
-        setCue({ message: null, severity: null });
-      }
-
-      // Voice reads the exact same primaryId/primaryMessage the cue
-      // banner just rendered from — this is what guarantees voice can
-      // never say something the banner isn't already showing.
-      speech.update(result.state, feedback);
-
-      // Depth bar fill: written straight to the DOM (no setState) since
-      // it changes almost every frame — see DepthBar.jsx for why.
-      if (metrics && depthFillRef.current) {
-        const depthPercent = clamp(
-          (depthBarStandingAngle - metrics.kneeAngleAvg) / (depthBarStandingAngle - depthBarDeepAngle),
-          0,
-          1
-        );
-        depthFillRef.current.style.height = `${depthPercent * 100}%`;
-        depthFillRef.current.style.backgroundColor =
-          depthPercent >= DEPTH_MARKER_PERCENT ? SEVERITY_COLORS.good : '#94a3b8';
-      }
-
-      if (result.justCompletedRep) {
-        const rep = result.justCompletedRep;
-        const failure = rep.valid ? null : pickPrimaryError(rep.errors, SQUAT_CONFIG.errorPriority);
-        setFlash({ id: `${rep.repNumber}-${rep.endTime}`, valid: rep.valid, reason: failure?.message ?? null });
-        speech.announceRep(result.state, rep, result.validReps);
-      }
-
-      if (showDebugRef.current) setDebugMetrics(metrics);
+      // COUNTDOWN: nothing to compute here — Countdown.jsx drives its own
+      // timing and calls back into transitionTo(ACTIVE) when it finishes.
 
       rafIdRef.current = requestAnimationFrame(loop);
     };
@@ -287,12 +361,13 @@ function CameraView() {
     return () => {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
     };
-    // repCounter and speech are intentionally omitted: both are new
-    // objects every render, and depending on them would tear down/rebuild
-    // the smoother (and its filter state) on every render instead of just
-    // on camera/model changes. Calling their methods from a "stale"
-    // closure is still safe — they delegate to stable refs/class
-    // instances underneath.
+    // repCounter, speech, stabilityTracker, and orientationDetector are
+    // intentionally omitted: repCounter/speech are new objects every
+    // render but delegate to stable class instances underneath, and
+    // stabilityTracker/orientationDetector are themselves stable
+    // (lazy useState, never replaced) — depending on any of them would
+    // tear down/rebuild the smoother on every render instead of just on
+    // camera/model changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, landmarker]);
 
@@ -328,6 +403,19 @@ function CameraView() {
     speech.reset();
   };
 
+  const handleSetupComplete = (exercise, orientation) => {
+    repCounter.setOrientation(orientation);
+    setSessionConfig({ exercise, orientation });
+    setResuming(false);
+    transitionTo(APP_STATES.COUNTDOWN);
+  };
+
+  const handleCountdownComplete = () => transitionTo(APP_STATES.ACTIVE);
+
+  const activeCheckNames = SQUAT_CONFIG.checks
+    .filter((check) => check.isApplicable(sessionConfig.orientation))
+    .map((check) => check.id);
+
   return (
     <div className="camera-view">
       {status === 'loading' && <div className="camera-message">Starting camera...</div>}
@@ -339,24 +427,42 @@ function CameraView() {
         <video ref={videoRef} className="camera-video" autoPlay playsInline muted />
         <canvas ref={canvasRef} className="camera-canvas" />
 
-        {status === 'ready' && <StatsOverlay fps={fps} detected={detected} />}
-
-        {status === 'ready' && (
-          <RepCounterOverlay
-            validReps={repCounter.validReps}
-            totalAttempts={repCounter.totalAttempts}
-            pulseKey={flash && flash.valid ? flash.id : null}
-            onReset={handleReset}
+        {status === 'ready' && appState === APP_STATES.SETUP && (
+          <SetupFlow
+            liveChecks={liveSetupChecks}
+            orientationResult={orientationResult}
+            onStart={handleSetupComplete}
+            onSkip={handleSetupComplete}
           />
         )}
 
-        {status === 'ready' && <CueBanner message={cue.message} severity={cue.severity} />}
+        {status === 'ready' && appState === APP_STATES.COUNTDOWN && (
+          <Countdown onComplete={handleCountdownComplete} resuming={resuming} />
+        )}
 
-        {status === 'ready' && <RepFlash flash={flash} />}
+        {status === 'ready' && appState === APP_STATES.PAUSED && <RepositionOverlay hint={pauseReason} />}
 
-        {status === 'ready' && <DepthBar ref={depthFillRef} markerPercent={DEPTH_MARKER_PERCENT} />}
+        {status === 'ready' && appState === APP_STATES.ACTIVE && (
+          <>
+            <StatsOverlay fps={fps} detected={detected} />
 
-        {status === 'ready' && <StateIndicator state={repCounter.state} orientation={repCounter.orientation} />}
+            <RepCounterOverlay
+              validReps={repCounter.validReps}
+              totalAttempts={repCounter.totalAttempts}
+              pulseKey={flash && flash.valid ? flash.id : null}
+              onReset={handleReset}
+            />
+
+            <CueBanner message={cue.message} severity={cue.severity} />
+            <RepFlash flash={flash} />
+            <DepthBar ref={depthFillRef} markerPercent={DEPTH_MARKER_PERCENT} />
+            <StateIndicator state={repCounter.state} orientation={sessionConfig.orientation} activeCheckNames={activeCheckNames} />
+
+            {!poseLoading && !poseError && !detected && (
+              <div className="camera-overlay-message">No person detected — step back into frame</div>
+            )}
+          </>
+        )}
 
         {status === 'ready' && <VoiceSettings settings={speech.settings} onChange={speech.setSettings} />}
 
@@ -364,18 +470,10 @@ function CameraView() {
           <DebugPanel metrics={debugMetrics} reps={repCounter.reps} activeErrors={repCounter.activeErrors} />
         )}
 
-        {status === 'ready' && poseLoading && (
-          <div className="camera-overlay-message">Loading pose model...</div>
-        )}
+        {status === 'ready' && poseLoading && <div className="camera-overlay-message">Loading pose model...</div>}
 
         {status === 'ready' && poseError && (
-          <div className="camera-overlay-message camera-overlay-error">
-            Failed to load the pose model.
-          </div>
-        )}
-
-        {status === 'ready' && !poseLoading && !poseError && !detected && (
-          <div className="camera-overlay-message">No person detected — step back into frame</div>
+          <div className="camera-overlay-message camera-overlay-error">Failed to load the pose model.</div>
         )}
       </div>
     </div>

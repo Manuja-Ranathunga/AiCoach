@@ -47,5 +47,23 @@ export function useRepCounter() {
     setOrientationState(next);
   };
 
-  return { state, totalAttempts, validReps, reps, activeErrors, orientation, update, reset, setOrientation };
+  // Discards the in-progress rep (if any) without touching session
+  // counters — for when a mid-set pause means its data can't be trusted.
+  const abandonCurrentRep = () => {
+    machine.abandonCurrentRep();
+    setState(machine.state);
+  };
+
+  return {
+    state,
+    totalAttempts,
+    validReps,
+    reps,
+    activeErrors,
+    orientation,
+    update,
+    reset,
+    setOrientation,
+    abandonCurrentRep,
+  };
 }

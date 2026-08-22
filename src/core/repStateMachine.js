@@ -70,12 +70,29 @@ export class RepStateMachine {
     this._resetAll();
   }
 
-  // Manual stand-in for Phase 7's real orientation detection: lets the
-  // caller tell the machine which camera-relative checks are meaningful
-  // right now (front-on checks like knee_valgus vs. side-on checks like
-  // excessive_lean can't both be evaluated from one fixed camera angle).
+  // Lets the caller tell the machine which camera-relative checks are
+  // meaningful right now (front-on checks like knee_valgus vs. side-on
+  // checks like excessive_lean can't both be evaluated from one fixed
+  // camera angle). Set once from the Phase 7 setup flow's view picker.
   setOrientation(orientation) {
     this.orientation = orientation;
+  }
+
+  // Discards whatever rep is in progress WITHOUT touching repCount/
+  // validReps/reps history — for when the app pauses mid-set (framing
+  // degraded) and the in-progress rep's data can no longer be trusted.
+  // Unlike reset(), the session itself continues once resumed.
+  abandonCurrentRep() {
+    this.currentRep = null;
+    this.state = this.state === STATES.IDLE ? STATES.IDLE : STATES.STANDING;
+    this.direction = null;
+    this.directionStreak = 0;
+    this.lastAngle = null;
+    this.lastValidMetricsAt = null;
+    this._descendStartAt = null;
+    this._bottomStartAt = null;
+    this._ascendStartAt = null;
+    this.errorTracker.reset();
   }
 
   getReps() {

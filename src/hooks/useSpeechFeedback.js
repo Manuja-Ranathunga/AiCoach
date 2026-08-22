@@ -113,6 +113,22 @@ export function useSpeechFeedback() {
     speakIfDecided(decision);
   };
 
+  // Call every frame during setup (or mid-set repositioning) with the
+  // current failing hint, or null if everything's passing. Shares
+  // FeedbackManager's cooldown rules — same "don't nag" behavior as
+  // in-workout coaching, just with the rep-state gate bypassed via
+  // eventCue (there's no rep state yet during setup).
+  const announceSetupHint = (hint) => {
+    if (!settings.enabled || !hint) return;
+
+    const eventCue = { id: 'setup_hint', priority: 'info', category: 'setup', text: hint };
+    const decision = manager.decide(
+      { state: 'SETUP', formCue: null, eventCue, isSpeaking: speechEngine.isSpeaking(), speakingPriority: speechEngine.getCurrentPriority() },
+      performance.now()
+    );
+    speakIfDecided(decision);
+  };
+
   // Call when the current set ends (currently wired to the Reset button).
   const announceSetEnd = (state, validReps) => {
     if (!settings.enabled || settings.correctionsOnly) return;
@@ -132,5 +148,5 @@ export function useSpeechFeedback() {
     cleanStreakRef.current = 0;
   };
 
-  return { settings, setSettings, update, announceRep, announceSetEnd, reset };
+  return { settings, setSettings, update, announceRep, announceSetupHint, announceSetEnd, reset };
 }
