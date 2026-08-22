@@ -1,0 +1,30 @@
+.nav-bar {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  justify-content: center;
+}
+
+.nav-bar-item {
+  padding: 0.5rem 1.1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+}
+
+.nav-bar-item:hover {
+  opacity: 0.9;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.nav-bar-item-active {
+  opacity: 1;
+  border-color: var(--color-good, #22c55e);
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--color-good, #22c55e);
+}

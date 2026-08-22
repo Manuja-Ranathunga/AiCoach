@@ -19,19 +19,27 @@ function depthPercent(angle) {
 
 const THRESHOLD_PERCENT = depthPercent(depthMaxKneeAngle);
 
-function SessionStrip({ sets, currentSetNumber }) {
+// onSelect is only passed by HistoryScreen, where a session can have
+// several sets and tapping one switches which set's detail is shown
+// below. The live in-workout summary never passes it — there's only ever
+// one "current" set on screen there — so the strip is just a display in
+// that context, same as Phase 8.
+function SessionStrip({ sets, currentSetNumber, onSelect }) {
   if (sets.length === 0) return null;
+  const Item = onSelect ? 'button' : 'div';
 
   return (
     <div className="session-strip">
       {sets.map((set) => (
-        <div
+        <Item
           key={set.setNumber}
+          type={onSelect ? 'button' : undefined}
           className={`session-strip-item${set.setNumber === currentSetNumber ? ' session-strip-current' : ''}`}
+          onClick={onSelect ? () => onSelect(set.setNumber) : undefined}
         >
           <span className="session-strip-set">Set {set.setNumber}</span>
           <span className="session-strip-score">{set.analytics.formScore.score ?? '—'}</span>
-        </div>
+        </Item>
       ))}
     </div>
   );
@@ -166,11 +174,17 @@ function FatigueNote({ fatigue }) {
 
 // Post-set summary: leads with ONE headline takeaway (the top entry from
 // generateInsights), then progressively more detail below for anyone who
-// wants to dig. `currentSet` is a record built by CameraView's
-// finalizeSet — { setNumber, reps, validReps, totalAttempts, analytics,
+// wants to dig. `currentSet` has the shape CameraView's finalizeSet
+// builds — { setNumber, reps, validReps, totalAttempts, analytics,
 // completedAt } — where `analytics` is sessionAnalytics.js's analyzeSet()
-// output, computed once at finalize time rather than on every render.
-function SummaryScreen({ currentSet, sessionSets, onNewSet, onDone }) {
+// output. Stored sets (Phase 9, see storage/sessionStore.js) are saved in
+// this exact shape specifically so HistoryScreen can pass one straight in
+// here with no adapter code.
+//
+// onNewSet/onDone are the live in-workout actions; HistoryScreen instead
+// passes onClose (read-only context, nothing to start or finish) and
+// onSelectSet (lets the session strip switch which set is shown).
+function SummaryScreen({ currentSet, sessionSets, onNewSet, onDone, onClose, onSelectSet }) {
   const { reps, validReps, totalAttempts, analytics, setNumber } = currentSet;
   const { formScore, fatigue, consistency, tempo, insights } = analytics;
   const mistakes = getMistakeBreakdown(reps);
@@ -178,7 +192,7 @@ function SummaryScreen({ currentSet, sessionSets, onNewSet, onDone }) {
 
   return (
     <div className="summary-screen">
-      <SessionStrip sets={sessionSets} currentSetNumber={setNumber} />
+      <SessionStrip sets={sessionSets} currentSetNumber={setNumber} onSelect={onSelectSet} />
 
       <div className="summary-headline">{headline}</div>
 
@@ -239,12 +253,20 @@ function SummaryScreen({ currentSet, sessionSets, onNewSet, onDone }) {
       <FatigueNote fatigue={fatigue} />
 
       <div className="summary-actions">
-        <button className="summary-primary-button" onClick={onNewSet}>
-          New Set
-        </button>
-        <button className="summary-secondary-button" onClick={onDone}>
-          Done
-        </button>
+        {onClose ? (
+          <button className="summary-secondary-button" onClick={onClose}>
+            Close
+          </button>
+        ) : (
+          <>
+            <button className="summary-primary-button" onClick={onNewSet}>
+              New Set
+            </button>
+            <button className="summary-secondary-button" onClick={onDone}>
+              Done
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

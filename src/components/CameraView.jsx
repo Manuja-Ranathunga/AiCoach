@@ -33,6 +33,9 @@ import Countdown from './Countdown';
 import RepositionOverlay from './RepositionOverlay';
 import SummaryScreen from './SummaryScreen';
 import DiscardConfirm from './DiscardConfirm';
+import ResumeSessionPrompt from './ResumeSessionPrompt';
+import StorageWarningBanner from './StorageWarningBanner';
+import * as sessionStore from '../storage/sessionStore';
 
 const FPS_WINDOW_SIZE = 30;
 const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity: null };
@@ -88,11 +91,18 @@ function CameraView() {
   const [orientationResult, setOrientationResult] = useState({ orientation: ORIENTATIONS.AMBIGUOUS, confidence: 0 });
   const [pauseReason, setPauseReason] = useState('');
   const [resuming, setResuming] = useState(false);
-  // Every set completed so far this session (in memory only — history
-  // persistence is Phase 9), plus the one currently on screen in SUMMARY.
+  // Every set completed so far this session, plus the one currently on
+  // screen in SUMMARY. Persisted to IndexedDB incrementally after each
+  // set (see finalizeSet/persistSession) so a crash/refresh only ever
+  // loses the set still in progress, never the ones already finished.
   const [sessionSets, setSessionSets] = useState([]);
   const [currentSetRecord, setCurrentSetRecord] = useState(null);
   const [pendingDiscardConfirm, setPendingDiscardConfirm] = useState(false);
+  // undefined = still checking on mount, null = none found, object = an
+  // unfinished session to offer resuming (see storage/sessionStore.js's
+  // getUnfinishedSessionToday and the mount effect below).
+  const [resumeCandidate, setResumeCandidate] = useState(undefined);
+  const [storageWarning, setStorageWarning] = useState(null);
 
   // Mirrors appState for the detection loop below to read without being
   // a dependency of that effect — depending on it directly would tear
@@ -114,6 +124,17 @@ function CameraView() {
   // that state back (see the comment on finalizeSet below).
   const idleStandingSinceRef = useRef(null);
   const setCounterRef = useRef(0);
+  // Phase 9 persistence bookkeeping — refs (not state) because they're
+  // read from inside the detection loop's stale effect closure the same
+  // way appStateRef/showDebugRef are. sessionId/sessionStartedAt are
+  // created lazily (see finalizeSet) on the first set actually completed,
+  // so a session the user never really started never gets saved.
+  const sessionIdRef = useRef(null);
+  const sessionStartedAtRef = useRef(null);
+  const sessionSetsRef = useRef([]); // mirrors sessionSets state, kept in sync wherever it's set
+  const sessionConfigRef = useRef({ exercise: 'squat', orientation: 'front' }); // mirrors sessionConfig state
+  const currentSetStartedAtRef = useRef(null); // wall-clock start of the set in progress (see handleCountdownComplete)
+  const storageWarnedRef = useRef(false);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
@@ -129,6 +150,35 @@ function CameraView() {
     setAppState(nextState);
   };
 
+  // Shows the storage-unavailable banner once per page load — see its
+  // component comment for why the workout itself never depends on this.
+  const warnStorageOnce = () => {
+    if (storageWarnedRef.current) return;
+    storageWarnedRef.current = true;
+    setStorageWarning('storage-unavailable');
+  };
+
+  // Upserts the whole session (all sets so far) to IndexedDB. Called
+  // after every finalized set, not just when the workout ends, so a
+  // crash/refresh mid-workout only ever loses the set in progress, never
+  // the ones already completed — see storage/sessionStore.js's
+  // getUnfinishedSessionToday for the other half of that story.
+  const persistSession = async (sets, finished) => {
+    if (sessionIdRef.current === null || sets.length === 0) return;
+
+    const session = {
+      id: sessionIdRef.current,
+      startedAt: sessionStartedAtRef.current,
+      endedAt: Date.now(),
+      exercise: sessionConfigRef.current.exercise,
+      sets,
+      active: !finished,
+    };
+
+    const ok = await sessionStore.saveSession(session);
+    if (!ok) warnStorageOnce();
+  };
+
   // Turns the machine's live rep array into a finalized set record and
   // moves to SUMMARY. Defined here (not down with handleReset etc.)
   // because, like transitionTo, it's called directly from inside the
@@ -136,25 +186,42 @@ function CameraView() {
   // safe because everything it touches is stable across renders:
   // repCounter.getReps()/reset() delegate to the never-replaced
   // RepStateMachine instance, setSessionSets/setCurrentSetRecord are
-  // React's stable setState functions, and setCounterRef is a ref.
+  // React's stable setState functions, and every ref (setCounterRef,
+  // sessionIdRef, sessionConfigRef, sessionSetsRef,
+  // currentSetStartedAtRef) is, well, a ref.
   const finalizeSet = (reps) => {
     setCounterRef.current += 1;
     const analytics = analyzeSet(reps);
     const validRepsCount = reps.filter((rep) => rep.valid).length;
+    const config = sessionConfigRef.current;
+    const now = Date.now();
 
     const record = {
       setNumber: setCounterRef.current,
+      exercise: config.exercise,
+      orientation: config.orientation,
+      startedAt: currentSetStartedAtRef.current ?? now,
+      endedAt: now,
       reps,
       validReps: validRepsCount,
       totalAttempts: reps.length,
       analytics,
-      completedAt: Date.now(),
+      completedAt: now,
     };
 
-    setSessionSets((prev) => [...prev, record]);
+    if (sessionIdRef.current === null) {
+      sessionIdRef.current = crypto.randomUUID();
+      sessionStartedAtRef.current = record.startedAt;
+    }
+
+    const nextSets = [...sessionSetsRef.current, record];
+    sessionSetsRef.current = nextSets;
+    setSessionSets(nextSets);
     setCurrentSetRecord(record);
     speech.announceSetSummary(validRepsCount, analytics.formScore.score);
     transitionTo(APP_STATES.SUMMARY);
+
+    persistSession(nextSets, false);
   };
 
   // Entry point for both the "End Set" button and the 20s idle auto-end.
@@ -191,6 +258,21 @@ function CameraView() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Once per mount: was there a session started today that never got a
+  // "Done" (see handleDone, which is the only thing that marks a session
+  // finished)? That's a refresh or crash mid-workout — offer to pick it
+  // back up. See ResumeSessionPrompt's comment for what resuming actually
+  // restores vs. what it can't (camera framing state is gone either way).
+  useEffect(() => {
+    let cancelled = false;
+    sessionStore.getUnfinishedSessionToday().then((session) => {
+      if (!cancelled) setResumeCandidate(session);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Keeps canvas.width/height (the actual pixel buffer) in sync with the
@@ -439,10 +521,12 @@ function CameraView() {
     // repCounter/speech are new objects every render but delegate to
     // stable class instances underneath, stabilityTracker/
     // orientationDetector are themselves stable (lazy useState, never
-    // replaced), and requestEndSet/finalizeSet are plain functions that
-    // only touch those same stable things (see the comment above
-    // finalizeSet). Depending on any of them would tear down/rebuild the
-    // smoother on every render instead of just on camera/model changes.
+    // replaced), and requestEndSet/finalizeSet (which itself calls
+    // persistSession/warnStorageOnce) are plain functions that only touch
+    // those same stable things plus the sessionStore module's exports,
+    // which are themselves stable (see the comment above finalizeSet).
+    // Depending on any of them would tear down/rebuild the smoother on
+    // every render instead of just on camera/model changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, landmarker]);
 
@@ -480,12 +564,21 @@ function CameraView() {
 
   const handleSetupComplete = (exercise, orientation) => {
     repCounter.setOrientation(orientation);
-    setSessionConfig({ exercise, orientation });
+    const next = { exercise, orientation };
+    sessionConfigRef.current = next; // see the comment on finalizeSet for why this needs a ref mirror
+    setSessionConfig(next);
     setResuming(false);
     transitionTo(APP_STATES.COUNTDOWN);
   };
 
-  const handleCountdownComplete = () => transitionTo(APP_STATES.ACTIVE);
+  const handleCountdownComplete = () => {
+    // Only stamp a fresh "set started" wall-clock time for a genuinely
+    // new set — when resuming after a mid-set pause, this same countdown
+    // fires but the set already has a real start time from before the
+    // pause, which finalizeSet needs to stay accurate.
+    if (!resuming) currentSetStartedAtRef.current = Date.now();
+    transitionTo(APP_STATES.ACTIVE);
+  };
 
   const handleDiscardConfirm = (discard) => {
     setPendingDiscardConfirm(false);
@@ -506,10 +599,34 @@ function CameraView() {
   };
 
   const handleDone = () => {
+    persistSession(sessionSetsRef.current, true); // marks the session finished (active: false)
+    sessionIdRef.current = null;
+    sessionStartedAtRef.current = null;
+    sessionSetsRef.current = [];
+    setCounterRef.current = 0;
+    setSessionSets([]);
     repCounter.reset();
     speech.reset();
     setCurrentSetRecord(null);
     transitionTo(APP_STATES.SETUP);
+  };
+
+  const handleResumeSession = (session) => {
+    sessionIdRef.current = session.id;
+    sessionStartedAtRef.current = session.startedAt;
+    sessionSetsRef.current = session.sets;
+    setCounterRef.current = session.sets.reduce((max, set) => Math.max(max, set.setNumber), 0);
+    setSessionSets(session.sets);
+    setResumeCandidate(null);
+    // Camera framing/orientation tracking doesn't survive a refresh, so
+    // resuming still goes through the full SETUP flow (already the
+    // default appState) rather than assuming anything about where the
+    // person is standing right now.
+  };
+
+  const handleDiscardSession = async (session) => {
+    await sessionStore.deleteSession(session.id);
+    setResumeCandidate(null);
   };
 
   const activeCheckNames = SQUAT_CONFIG.checks
@@ -533,6 +650,14 @@ function CameraView() {
             orientationResult={orientationResult}
             onStart={handleSetupComplete}
             onSkip={handleSetupComplete}
+          />
+        )}
+
+        {status === 'ready' && appState === APP_STATES.SETUP && resumeCandidate && (
+          <ResumeSessionPrompt
+            session={resumeCandidate}
+            onResume={() => handleResumeSession(resumeCandidate)}
+            onDiscard={() => handleDiscardSession(resumeCandidate)}
           />
         )}
 
@@ -578,6 +703,8 @@ function CameraView() {
         )}
 
         {status === 'ready' && <VoiceSettings settings={speech.settings} onChange={speech.setSettings} />}
+
+        {status === 'ready' && storageWarning && <StorageWarningBanner onDismiss={() => setStorageWarning(null)} />}
 
         {status === 'ready' && showDebug && (
           <DebugPanel metrics={debugMetrics} reps={repCounter.reps} activeErrors={repCounter.activeErrors} />

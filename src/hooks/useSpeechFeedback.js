@@ -3,8 +3,13 @@ import { FeedbackManager, buildFormCueCandidate, numberToWords } from '../core/f
 import { pickPrimaryError } from '../core/feedbackState';
 import { speechEngine } from '../core/speechEngine';
 import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
+import * as sessionStore from '../storage/sessionStore';
 
-const SETTINGS_STORAGE_KEY = 'aicoach.voiceSettings';
+// Phase 9: settings now live in IndexedDB (via sessionStore) instead of
+// localStorage, so they show up in export/import alongside session
+// history. Kept as a fallback read-path only, for the one-time migration
+// below — nothing writes here anymore.
+const LEGACY_STORAGE_KEY = 'aicoach.voiceSettings';
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -13,38 +18,65 @@ const DEFAULT_SETTINGS = {
   correctionsOnly: false,
 };
 
-function loadSettings() {
-  try {
-    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
-
 // Wraps FeedbackManager + speechEngine for the component tree: applies
-// settings (persisted to localStorage), warms up speech on the user's
-// first click, tracks the clean-rep streak praise needs, and exposes
-// three calls the detection loop / UI can make without knowing any of
+// settings (persisted via sessionStore/IndexedDB), warms up speech on the
+// user's first click, tracks the clean-rep streak praise needs, and
+// exposes calls the detection loop / UI can make without knowing any of
 // the throttling rules themselves.
 export function useSpeechFeedback() {
   const [manager] = useState(() => new FeedbackManager());
-  const [settings, setSettings] = useState(loadSettings);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  // Storage is async (IndexedDB), so settings start at defaults and are
+  // replaced once the real values load — see the load effect below. This
+  // also guards the save effect from writing DEFAULT_SETTINGS back over
+  // whatever's actually stored before the load has even finished.
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const cleanStreakRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      let loaded = await sessionStore.loadSettings();
+
+      if (!loaded) {
+        // One-time migration: this user has settings from before Phase 9
+        // in localStorage. Move them into IndexedDB and stop using the
+        // old key.
+        try {
+          const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+          if (raw) {
+            loaded = JSON.parse(raw);
+            await sessionStore.saveSettings(loaded);
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
+          }
+        } catch {
+          // No legacy settings, or they were corrupt — fall through to defaults.
+        }
+      }
+
+      if (cancelled) return;
+      if (loaded) setSettings({ ...DEFAULT_SETTINGS, ...loaded });
+      setSettingsLoaded(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     speechEngine.setRate(settings.rate);
     speechEngine.setVolume(settings.enabled ? settings.volume : 0);
     if (!settings.enabled) speechEngine.cancel(); // instant silence, regardless of what's mid-utterance
 
-    try {
-      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-    } catch {
-      // Private browsing / quota exceeded — voice still works this
-      // session, it just won't remember settings for next time.
-    }
-  }, [settings]);
+    if (!settingsLoaded) return; // don't stomp stored settings with defaults before the load above resolves
+
+    // Best-effort: if storage is unavailable, voice control still works
+    // for this session, it just won't remember settings for next time —
+    // matches the "degrade to in-memory" rule the rest of storage follows.
+    sessionStore.saveSettings(settings);
+  }, [settings, settingsLoaded]);
 
   useEffect(() => {
     const warmUpOnce = () => {
