@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import './CameraView.css';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useRepCounter } from '../hooks/useRepCounter';
+import { useSpeechFeedback } from '../hooks/useSpeechFeedback';
 import { drawSkeleton, drawLandmarks, SEVERITY_COLORS } from '../core/drawing';
 import { LandmarkSmoother } from '../core/smoothing';
 import { getSquatMetrics } from '../core/exercises/squat';
@@ -14,8 +15,10 @@ import CueBanner from './CueBanner';
 import RepFlash from './RepFlash';
 import StateIndicator from './StateIndicator';
 import DepthBar from './DepthBar';
+import VoiceSettings from './VoiceSettings';
 
 const FPS_WINDOW_SIZE = 30;
+const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity: null };
 
 const { depthBarStandingAngle, depthBarDeepAngle, depthMaxKneeAngle } = SQUAT_CONFIG.thresholds;
 const DEPTH_MARKER_PERCENT = clamp(
@@ -58,6 +61,7 @@ function CameraView() {
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
+  const speech = useSpeechFeedback();
 
   // Colors are defined once in core/drawing.js; publish them as CSS
   // custom properties so the HUD's CSS-based elements (cue banner, depth
@@ -219,8 +223,10 @@ function CameraView() {
       // rep flash react on THIS frame, not one render behind.
       const result = repCounter.update(metrics, now);
 
+      let feedback = EMPTY_FEEDBACK;
+
       if (smoothedLandmarks && smoothedLandmarks.length > 0) {
-        const feedback = buildFeedbackState(result.activeErrors, SQUAT_CONFIG);
+        feedback = buildFeedbackState(result.activeErrors, SQUAT_CONFIG);
 
         // ---- MIRROR FIX (the only place this happens) ----
         // The <canvas> has no CSS mirroring (only the <video> does), so
@@ -246,6 +252,11 @@ function CameraView() {
         setCue({ message: null, severity: null });
       }
 
+      // Voice reads the exact same primaryId/primaryMessage the cue
+      // banner just rendered from — this is what guarantees voice can
+      // never say something the banner isn't already showing.
+      speech.update(result.state, feedback);
+
       // Depth bar fill: written straight to the DOM (no setState) since
       // it changes almost every frame — see DepthBar.jsx for why.
       if (metrics && depthFillRef.current) {
@@ -263,6 +274,7 @@ function CameraView() {
         const rep = result.justCompletedRep;
         const failure = rep.valid ? null : pickPrimaryError(rep.errors, SQUAT_CONFIG.errorPriority);
         setFlash({ id: `${rep.repNumber}-${rep.endTime}`, valid: rep.valid, reason: failure?.message ?? null });
+        speech.announceRep(result.state, rep, result.validReps);
       }
 
       if (showDebugRef.current) setDebugMetrics(metrics);
@@ -275,9 +287,12 @@ function CameraView() {
     return () => {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
     };
-    // repCounter is intentionally omitted: it's a new object every render,
-    // and depending on it would tear down/rebuild the smoother (and its
-    // filter state) on every render instead of just on camera/model changes.
+    // repCounter and speech are intentionally omitted: both are new
+    // objects every render, and depending on them would tear down/rebuild
+    // the smoother (and its filter state) on every render instead of just
+    // on camera/model changes. Calling their methods from a "stale"
+    // closure is still safe — they delegate to stable refs/class
+    // instances underneath.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, landmarker]);
 
@@ -307,6 +322,12 @@ function CameraView() {
     );
   }
 
+  const handleReset = () => {
+    speech.announceSetEnd(repCounter.state, repCounter.validReps);
+    repCounter.reset();
+    speech.reset();
+  };
+
   return (
     <div className="camera-view">
       {status === 'loading' && <div className="camera-message">Starting camera...</div>}
@@ -325,7 +346,7 @@ function CameraView() {
             validReps={repCounter.validReps}
             totalAttempts={repCounter.totalAttempts}
             pulseKey={flash && flash.valid ? flash.id : null}
-            onReset={repCounter.reset}
+            onReset={handleReset}
           />
         )}
 
@@ -336,6 +357,8 @@ function CameraView() {
         {status === 'ready' && <DepthBar ref={depthFillRef} markerPercent={DEPTH_MARKER_PERCENT} />}
 
         {status === 'ready' && <StateIndicator state={repCounter.state} orientation={repCounter.orientation} />}
+
+        {status === 'ready' && <VoiceSettings settings={speech.settings} onChange={speech.setSettings} />}
 
         {status === 'ready' && showDebug && (
           <DebugPanel metrics={debugMetrics} reps={repCounter.reps} activeErrors={repCounter.activeErrors} />

@@ -59,6 +59,7 @@ export function buildFeedbackState(activeErrors, exerciseConfig) {
   return {
     segmentColors,
     jointColors,
+    primaryId: primary?.id ?? null,
     primaryMessage: primary?.message ?? null,
     primarySeverity: primary?.severity ?? null,
   };

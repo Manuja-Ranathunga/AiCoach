@@ -31,6 +31,16 @@ const SEGMENTS_BY_CHECK_ID = {
   excessive_lean: TORSO_SEGMENTS, // shoulder-hip torso segments
 };
 
+// Spoken phrasings per check, kept SHORT (2-4 words) — a long sentence is
+// still finishing after the rep is over and useless by the time it lands.
+// feedbackManager rotates through these so the same correction doesn't
+// sound identically robotic every time it repeats.
+const VOICE_CUES_BY_CHECK_ID = {
+  insufficient_depth: ['Go deeper', 'A little lower next time'],
+  knee_valgus: ['Push your knees out', 'Knees out'],
+  excessive_lean: ['Chest up', 'Keep your chest tall'],
+};
+
 function jointsFromSegments(segments) {
   return [...new Set(segments.flat())];
 }
@@ -54,6 +64,11 @@ export const SQUAT_CONFIG = {
   errorPriority: ['insufficient_depth', 'knee_valgus', 'excessive_lean'],
   checks: CHECKS.map((check) => {
     const affectedSegments = SEGMENTS_BY_CHECK_ID[check.id] ?? [];
-    return { ...check, affectedSegments, affectedJoints: jointsFromSegments(affectedSegments) };
+    return {
+      ...check,
+      affectedSegments,
+      affectedJoints: jointsFromSegments(affectedSegments),
+      voiceCues: VOICE_CUES_BY_CHECK_ID[check.id] ?? [check.message],
+    };
   }),
 };
