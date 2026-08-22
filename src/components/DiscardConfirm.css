@@ -1,0 +1,66 @@
+.discard-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 10;
+}
+
+.discard-confirm-panel {
+  width: 100%;
+  max-width: 360px;
+  padding: 1.25rem 1.5rem;
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  color: #fff;
+  text-align: center;
+}
+
+.discard-confirm-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.discard-confirm-body {
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.discard-confirm-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.discard-confirm-actions button {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.discard-confirm-keep {
+  border: 1px solid var(--color-good, #22c55e);
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--color-good, #22c55e);
+}
+
+.discard-confirm-keep:hover {
+  background: rgba(34, 197, 94, 0.3);
+}
+
+.discard-confirm-discard {
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: transparent;
+  color: #fff;
+}
+
+.discard-confirm-discard:hover {
+  background: rgba(255, 255, 255, 0.15);
+}

@@ -41,6 +41,15 @@ const VOICE_CUES_BY_CHECK_ID = {
   excessive_lean: ['Chest up', 'Keep your chest tall'],
 };
 
+// Longer-form "how to fix it" tips for the post-set summary — shown once
+// per set rather than spoken, so these can be a full sentence unlike the
+// voice cues above.
+const TIPS_BY_CHECK_ID = {
+  insufficient_depth: 'Sit back and down until your hips drop below knee level.',
+  knee_valgus: 'Try a wider stance so your knees have room to track over your toes.',
+  excessive_lean: 'Brace your core and keep your chest lifted through the whole rep.',
+};
+
 function jointsFromSegments(segments) {
   return [...new Set(segments.flat())];
 }
@@ -69,6 +78,7 @@ export const SQUAT_CONFIG = {
       affectedSegments,
       affectedJoints: jointsFromSegments(affectedSegments),
       voiceCues: VOICE_CUES_BY_CHECK_ID[check.id] ?? [check.message],
+      tip: TIPS_BY_CHECK_ID[check.id] ?? null,
     };
   }),
 };

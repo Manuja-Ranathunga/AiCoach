@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FeedbackManager, buildFormCueCandidate } from '../core/feedbackManager';
+import { FeedbackManager, buildFormCueCandidate, numberToWords } from '../core/feedbackManager';
 import { pickPrimaryError } from '../core/feedbackState';
 import { speechEngine } from '../core/speechEngine';
 import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
@@ -143,10 +143,22 @@ export function useSpeechFeedback() {
     speakIfDecided(decision);
   };
 
+  // Call once when a set is finalized into a summary (see CameraView's
+  // finalizeSet). Deliberately bypasses FeedbackManager's throttling —
+  // same reasoning as Countdown.jsx: this is a one-shot lifecycle event,
+  // not a per-frame coaching cue subject to the nagging-prevention rules.
+  // "Nothing more" is the whole design goal here, so keep it to one line.
+  const announceSetSummary = (validReps, formScore) => {
+    if (!settings.enabled) return;
+    const repWord = `${numberToWords(validReps)} valid rep${validReps === 1 ? '' : 's'}`;
+    const text = formScore != null ? `${repWord}. Form score ${formScore}.` : `${repWord}.`;
+    speechEngine.speak(text, { priority: 'info', interrupt: true });
+  };
+
   const reset = () => {
     manager.reset();
     cleanStreakRef.current = 0;
   };
 
-  return { settings, setSettings, update, announceRep, announceSetupHint, announceSetEnd, reset };
+  return { settings, setSettings, update, announceRep, announceSetupHint, announceSetEnd, announceSetSummary, reset };
 }

@@ -19,6 +19,7 @@ import {
   StabilityTracker,
 } from '../core/setupChecks';
 import { OrientationDetector, ORIENTATIONS } from '../core/orientationDetector';
+import { analyzeSet } from '../core/sessionAnalytics';
 import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
 import RepCounterOverlay from './RepCounterOverlay';
@@ -30,6 +31,8 @@ import VoiceSettings from './VoiceSettings';
 import SetupFlow from './SetupFlow';
 import Countdown from './Countdown';
 import RepositionOverlay from './RepositionOverlay';
+import SummaryScreen from './SummaryScreen';
+import DiscardConfirm from './DiscardConfirm';
 
 const FPS_WINDOW_SIZE = 30;
 const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity: null };
@@ -41,6 +44,13 @@ const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity:
 // visibly back in position.
 const PAUSE_THRESHOLD_MS = 2000;
 const RESUME_STABLE_MS = 800;
+// How long standing with no rep in progress auto-ends a set — a real
+// break, not one long pause between reps.
+const AUTO_END_IDLE_MS = 20000;
+// Below this many reps, ending is probably a mis-trigger (accidental
+// button press, or the idle timer firing before a real attempt) rather
+// than a real set worth a summary — see requestEndSet/DiscardConfirm.
+const MIN_REPS_TO_SUMMARIZE = 3;
 
 const { depthBarStandingAngle, depthBarDeepAngle, depthMaxKneeAngle } = SQUAT_CONFIG.thresholds;
 const DEPTH_MARKER_PERCENT = clamp(
@@ -78,6 +88,11 @@ function CameraView() {
   const [orientationResult, setOrientationResult] = useState({ orientation: ORIENTATIONS.AMBIGUOUS, confidence: 0 });
   const [pauseReason, setPauseReason] = useState('');
   const [resuming, setResuming] = useState(false);
+  // Every set completed so far this session (in memory only — history
+  // persistence is Phase 9), plus the one currently on screen in SUMMARY.
+  const [sessionSets, setSessionSets] = useState([]);
+  const [currentSetRecord, setCurrentSetRecord] = useState(null);
+  const [pendingDiscardConfirm, setPendingDiscardConfirm] = useState(false);
 
   // Mirrors appState for the detection loop below to read without being
   // a dependency of that effect — depending on it directly would tear
@@ -93,6 +108,12 @@ function CameraView() {
   // in the loop below).
   const pauseSinceRef = useRef(null);
   const resumeOkSinceRef = useRef(null);
+  // Tracks how long the person has been standing with no rep in progress,
+  // for the 20s auto-end. Set numbers are a plain counter rather than
+  // derived from sessionSets.length so finalizeSet doesn't need to read
+  // that state back (see the comment on finalizeSet below).
+  const idleStandingSinceRef = useRef(null);
+  const setCounterRef = useRef(0);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
@@ -106,6 +127,46 @@ function CameraView() {
   const transitionTo = (nextState) => {
     appStateRef.current = nextState;
     setAppState(nextState);
+  };
+
+  // Turns the machine's live rep array into a finalized set record and
+  // moves to SUMMARY. Defined here (not down with handleReset etc.)
+  // because, like transitionTo, it's called directly from inside the
+  // detection loop's stale effect closure (the 20s idle auto-end below) —
+  // safe because everything it touches is stable across renders:
+  // repCounter.getReps()/reset() delegate to the never-replaced
+  // RepStateMachine instance, setSessionSets/setCurrentSetRecord are
+  // React's stable setState functions, and setCounterRef is a ref.
+  const finalizeSet = (reps) => {
+    setCounterRef.current += 1;
+    const analytics = analyzeSet(reps);
+    const validRepsCount = reps.filter((rep) => rep.valid).length;
+
+    const record = {
+      setNumber: setCounterRef.current,
+      reps,
+      validReps: validRepsCount,
+      totalAttempts: reps.length,
+      analytics,
+      completedAt: Date.now(),
+    };
+
+    setSessionSets((prev) => [...prev, record]);
+    setCurrentSetRecord(record);
+    speech.announceSetSummary(validRepsCount, analytics.formScore.score);
+    transitionTo(APP_STATES.SUMMARY);
+  };
+
+  // Entry point for both the "End Set" button and the 20s idle auto-end.
+  // A too-short set is probably a mis-trigger, so confirm before
+  // discarding it instead of silently producing a near-empty summary.
+  const requestEndSet = () => {
+    const reps = repCounter.getReps();
+    if (reps.length < MIN_REPS_TO_SUMMARIZE) {
+      setPendingDiscardConfirm(true);
+      return;
+    }
+    finalizeSet(reps);
   };
 
   // Colors are defined once in core/drawing.js; publish them as CSS
@@ -310,6 +371,18 @@ function CameraView() {
 
         if (showDebugRef.current) setDebugMetrics(metrics);
 
+        // Auto-end: no rep in progress, just standing, for a while — the
+        // person has likely finished without pressing "End Set".
+        if (result.state === 'STANDING') {
+          if (idleStandingSinceRef.current === null) idleStandingSinceRef.current = now;
+          if (now - idleStandingSinceRef.current > AUTO_END_IDLE_MS) {
+            idleStandingSinceRef.current = null;
+            requestEndSet();
+          }
+        } else {
+          idleStandingSinceRef.current = null;
+        }
+
         // Mid-set framing monitor: only the "can we trust this framing"
         // checks apply here — stability doesn't, a squat is supposed to
         // move. Sustained failure (not a single bad frame) pauses the set.
@@ -361,13 +434,15 @@ function CameraView() {
     return () => {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
     };
-    // repCounter, speech, stabilityTracker, and orientationDetector are
-    // intentionally omitted: repCounter/speech are new objects every
-    // render but delegate to stable class instances underneath, and
-    // stabilityTracker/orientationDetector are themselves stable
-    // (lazy useState, never replaced) — depending on any of them would
-    // tear down/rebuild the smoother on every render instead of just on
-    // camera/model changes.
+    // repCounter, speech, stabilityTracker, orientationDetector,
+    // requestEndSet, and finalizeSet are intentionally omitted:
+    // repCounter/speech are new objects every render but delegate to
+    // stable class instances underneath, stabilityTracker/
+    // orientationDetector are themselves stable (lazy useState, never
+    // replaced), and requestEndSet/finalizeSet are plain functions that
+    // only touch those same stable things (see the comment above
+    // finalizeSet). Depending on any of them would tear down/rebuild the
+    // smoother on every render instead of just on camera/model changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, landmarker]);
 
@@ -412,6 +487,31 @@ function CameraView() {
 
   const handleCountdownComplete = () => transitionTo(APP_STATES.ACTIVE);
 
+  const handleDiscardConfirm = (discard) => {
+    setPendingDiscardConfirm(false);
+    if (discard) {
+      repCounter.reset();
+      speech.reset();
+    }
+  };
+
+  // Alignment was already confirmed once this session to get here, so
+  // skip straight to a countdown instead of the full SetupFlow.
+  const handleNewSet = () => {
+    repCounter.reset();
+    speech.reset();
+    setCurrentSetRecord(null);
+    setResuming(false);
+    transitionTo(APP_STATES.COUNTDOWN);
+  };
+
+  const handleDone = () => {
+    repCounter.reset();
+    speech.reset();
+    setCurrentSetRecord(null);
+    transitionTo(APP_STATES.SETUP);
+  };
+
   const activeCheckNames = SQUAT_CONFIG.checks
     .filter((check) => check.isApplicable(sessionConfig.orientation))
     .map((check) => check.id);
@@ -451,6 +551,7 @@ function CameraView() {
               totalAttempts={repCounter.totalAttempts}
               pulseKey={flash && flash.valid ? flash.id : null}
               onReset={handleReset}
+              onEndSet={requestEndSet}
             />
 
             <CueBanner message={cue.message} severity={cue.severity} />
@@ -461,7 +562,19 @@ function CameraView() {
             {!poseLoading && !poseError && !detected && (
               <div className="camera-overlay-message">No person detected — step back into frame</div>
             )}
+
+            {pendingDiscardConfirm && (
+              <DiscardConfirm
+                repCount={repCounter.reps.length}
+                onDiscard={() => handleDiscardConfirm(true)}
+                onKeepGoing={() => handleDiscardConfirm(false)}
+              />
+            )}
           </>
+        )}
+
+        {status === 'ready' && appState === APP_STATES.SUMMARY && currentSetRecord && (
+          <SummaryScreen currentSet={currentSetRecord} sessionSets={sessionSets} onNewSet={handleNewSet} onDone={handleDone} />
         )}
 
         {status === 'ready' && <VoiceSettings settings={speech.settings} onChange={speech.setSettings} />}

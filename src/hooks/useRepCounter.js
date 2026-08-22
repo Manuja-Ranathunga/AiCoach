@@ -54,6 +54,14 @@ export function useRepCounter() {
     setState(machine.state);
   };
 
+  // Reads the machine's rep array directly rather than the `reps` React
+  // state above. Needed by the detection loop's end-of-set logic, which
+  // runs inside an effect whose closure is only refreshed when the
+  // camera/model change (see CameraView.jsx) — `reps` state there would
+  // be frozen at whatever it was on that render, but the machine instance
+  // itself never changes, so calling through to it always reads live data.
+  const getReps = () => machine.getReps();
+
   return {
     state,
     totalAttempts,
@@ -65,5 +73,6 @@ export function useRepCounter() {
     reset,
     setOrientation,
     abandonCurrentRep,
+    getReps,
   };
 }
