@@ -8,6 +8,7 @@ import { getSquatMetrics } from '../core/exercises/squat';
 import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
 import RepCounterOverlay from './RepCounterOverlay';
+import ActiveErrorBanner from './ActiveErrorBanner';
 
 const FPS_WINDOW_SIZE = 30;
 
@@ -28,9 +29,18 @@ function CameraView() {
   // down and recreate the LandmarkSmoother (losing its filter state, so
   // values would jump) every time 'd' is pressed.
   const showDebugRef = useRef(false);
+  // Mirrors repCounter.orientation for the keydown handler below. The
+  // handler is registered once (mount-only effect), so reading
+  // repCounter.orientation directly inside it would always see its
+  // value from that first render — this ref stays current instead.
+  const orientationRef = useRef('front');
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
+
+  useEffect(() => {
+    orientationRef.current = repCounter.orientation;
+  }, [repCounter.orientation]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -39,10 +49,18 @@ function CameraView() {
           showDebugRef.current = !prev;
           return !prev;
         });
+      } else if (event.key === 'o') {
+        // Manual stand-in for Phase 7's real orientation detection — lets
+        // front-on-only checks (knee_valgus) and side-on-only checks
+        // (excessive_lean) both be tested before that exists.
+        const next = orientationRef.current === 'front' ? 'side' : 'front';
+        orientationRef.current = next;
+        repCounter.setOrientation(next);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keeps canvas.width/height (the actual pixel buffer) in sync with the
@@ -238,10 +256,20 @@ function CameraView() {
         {status === 'ready' && <StatsOverlay fps={fps} detected={detected} />}
 
         {status === 'ready' && (
-          <RepCounterOverlay repCount={repCounter.repCount} state={repCounter.state} onReset={repCounter.reset} />
+          <RepCounterOverlay
+            validReps={repCounter.validReps}
+            totalAttempts={repCounter.totalAttempts}
+            state={repCounter.state}
+            orientation={repCounter.orientation}
+            onReset={repCounter.reset}
+          />
         )}
 
-        {status === 'ready' && showDebug && <DebugPanel metrics={debugMetrics} reps={repCounter.reps} />}
+        {status === 'ready' && <ActiveErrorBanner activeErrors={repCounter.activeErrors} />}
+
+        {status === 'ready' && showDebug && (
+          <DebugPanel metrics={debugMetrics} reps={repCounter.reps} activeErrors={repCounter.activeErrors} />
+        )}
 
         {status === 'ready' && poseLoading && (
           <div className="camera-overlay-message">Loading pose model...</div>

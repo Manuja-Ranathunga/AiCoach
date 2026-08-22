@@ -8,7 +8,14 @@ import {
   LEFT_ANKLE,
   RIGHT_ANKLE,
 } from '../landmarkIndices';
-import { angleBetween, angleFromVertical, midpoint, toAspectSpace } from '../geometry';
+import {
+  angleBetween,
+  angleFromVertical,
+  distance,
+  horizontalDeviationFromLine,
+  midpoint,
+  toAspectSpace,
+} from '../geometry';
 
 // This file only measures — it has no opinion on what a "good" angle is.
 // Judging (thresholds, rep phases, form errors) belongs in later phases.
@@ -81,6 +88,22 @@ export function getSquatMetrics(smoothedLandmarks, aspectRatio) {
 
   const kneeSymmetryDiff = Math.abs(kneeAngleL - kneeAngleR);
 
+  // Knee valgus measurement: how far each knee has drifted sideways from
+  // the straight hip->ankle line for that same leg, as a fraction of hip
+  // width (so the same tolerance works regardless of body size or camera
+  // distance). Sign is flipped per leg so that positive always means
+  // "toward the body's midline" (caving in), negative means "away from
+  // it" (fine) — determined live from which side each hip is on, rather
+  // than assuming a fixed camera-facing direction.
+  const hipWidth = distance(leftHip, rightHip);
+  const midlineDirection = Math.sign(rightHip.x - leftHip.x) || 1;
+
+  const rawDeviationL = horizontalDeviationFromLine(leftHip, leftAnkle, leftKnee);
+  const rawDeviationR = horizontalDeviationFromLine(rightHip, rightAnkle, rightKnee);
+
+  const kneeDeviationL = hipWidth > 0 ? (rawDeviationL * midlineDirection) / hipWidth : 0;
+  const kneeDeviationR = hipWidth > 0 ? (rawDeviationR * -midlineDirection) / hipWidth : 0;
+
   return {
     kneeAngleL,
     kneeAngleR,
@@ -93,6 +116,8 @@ export function getSquatMetrics(smoothedLandmarks, aspectRatio) {
     kneeY,
     depthRatio,
     kneeSymmetryDiff,
+    kneeDeviationL,
+    kneeDeviationR,
     confidence,
   };
 }

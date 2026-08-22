@@ -3,6 +3,7 @@
   top: 8px;
   right: 8px;
   min-width: 220px;
+  max-width: 340px;
   padding: 0.6rem 0.75rem;
   background: rgba(0, 0, 0, 0.72);
   color: #fff;
@@ -36,9 +37,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+.debug-panel-active-errors {
+  margin: 0 0 0.6rem;
+  padding-left: 1.1rem;
+  color: #f87171;
+}
+
 .debug-panel-reps {
   max-height: 140px;
-  overflow-y: auto;
+  overflow: auto;
 }
 
 .debug-panel-reps th {

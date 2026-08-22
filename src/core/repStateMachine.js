@@ -1,6 +1,10 @@
 // Pure state machine that turns a stream of kneeAngleAvg readings into
-// counted squat reps. No React, no MediaPipe — just numbers in, rep
-// records out. Fully unit-testable in isolation.
+// counted squat reps, and — new in Phase 4 — runs form checks against
+// each rep and gates its validity. No React, no MediaPipe — just numbers
+// in, rep records out. Fully unit-testable in isolation.
+
+import { evaluateChecks, ErrorTracker } from './formChecks';
+import { SQUAT_CONFIG } from './exercises/squatConfig';
 
 export const STATES = {
   IDLE: 'IDLE',
@@ -11,7 +15,9 @@ export const STATES = {
 };
 
 // Every tunable number lives here so thresholds can be adjusted without
-// touching the transition logic below.
+// touching the transition logic below. Form-check thresholds (depth,
+// valgus, lean) are a separate concern and live in exercises/squatConfig.js
+// instead — this config is only about state-machine timing.
 //
 // Why hysteresis: if STANDING and DESCENDING shared one boundary (say,
 // both at 160), a knee angle sitting right at 160 — with even the small
@@ -42,19 +48,34 @@ function freshRep(repNumber, timestampMs) {
     ascentDuration: null,
     totalDuration: null,
     minConfidence: Infinity,
-    errors: [], // Phase 4 fills this in
-    valid: true, // Phase 4 gates this
+    errors: [],
+    valid: true, // provisional — finalized against errors in _completeRep
   };
 }
 
 export class RepStateMachine {
-  constructor(config = {}) {
+  // exerciseConfig supplies form-check thresholds + the checks list (see
+  // exercises/squatConfig.js); orientation feeds each check's
+  // isApplicable() and is hardcoded to 'front' for now — Phase 7 will
+  // detect it from the camera instead of assuming it.
+  constructor({ config = {}, exerciseConfig = SQUAT_CONFIG, orientation = 'front' } = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.exerciseConfig = exerciseConfig;
+    this.orientation = orientation;
+    this.errorTracker = new ErrorTracker(this.exerciseConfig?.thresholds?.errorConfirmFrames ?? 4);
     this._resetAll();
   }
 
   reset() {
     this._resetAll();
+  }
+
+  // Manual stand-in for Phase 7's real orientation detection: lets the
+  // caller tell the machine which camera-relative checks are meaningful
+  // right now (front-on checks like knee_valgus vs. side-on checks like
+  // excessive_lean can't both be evaluated from one fixed camera angle).
+  setOrientation(orientation) {
+    this.orientation = orientation;
   }
 
   getReps() {
@@ -87,6 +108,7 @@ export class RepStateMachine {
   _resetAll() {
     this.state = STATES.IDLE;
     this.repCount = 0;
+    this.validReps = 0;
     this.reps = [];
     this.currentRep = null;
 
@@ -98,14 +120,18 @@ export class RepStateMachine {
     this._descendStartAt = null;
     this._bottomStartAt = null;
     this._ascendStartAt = null;
+
+    this.errorTracker.reset();
   }
 
   _result(justCompletedRep) {
     return {
       state: this.state,
-      repCount: this.repCount,
+      totalAttempts: this.repCount,
+      validReps: this.validReps,
       currentRep: this.currentRep,
       justCompletedRep,
+      activeErrors: this.errorTracker.getActiveErrors(),
     };
   }
 
@@ -149,13 +175,17 @@ export class RepStateMachine {
       this._descendStartAt = null;
       this._bottomStartAt = null;
       this._ascendStartAt = null;
+      this.errorTracker.reset();
     }
   }
 
   _applyTransition(angle, confirmedDirection, metrics, timestampMs) {
     const { standingAngle, descendingAngle, bottomAngle, ascendingAngle } = this.config;
 
-    if (this.currentRep) this._trackFrame(metrics);
+    if (this.currentRep) {
+      this._trackFrame(metrics);
+      this._runPerFrameChecks(metrics);
+    }
 
     switch (this.state) {
       case STATES.IDLE:
@@ -167,6 +197,7 @@ export class RepStateMachine {
       case STATES.STANDING:
         if (angle < descendingAngle && confirmedDirection === 'down') {
           this.currentRep = freshRep(this.repCount + 1, timestampMs);
+          this.errorTracker.reset();
           this._trackFrame(metrics);
           this._descendStartAt = timestampMs;
           this.state = STATES.DESCENDING;
@@ -182,6 +213,7 @@ export class RepStateMachine {
           // a real rep attempt. Discard it instead of getting stuck here.
           this.currentRep = null;
           this._descendStartAt = null;
+          this.errorTracker.reset();
           this.state = STATES.STANDING;
         }
         break;
@@ -213,6 +245,21 @@ export class RepStateMachine {
     if (metrics.confidence < rep.minConfidence) rep.minConfidence = metrics.confidence;
   }
 
+  _runPerFrameChecks(metrics) {
+    if (!this.exerciseConfig) return;
+
+    const failures = evaluateChecks(this.exerciseConfig.checks, {
+      phase: 'perFrame',
+      state: this.state,
+      metrics,
+      repContext: this.currentRep,
+      thresholds: this.exerciseConfig.thresholds,
+      orientation: this.orientation,
+    });
+
+    this.errorTracker.update(failures);
+  }
+
   _completeRep(timestampMs) {
     const rep = this.currentRep;
     rep.endTime = timestampMs;
@@ -221,7 +268,28 @@ export class RepStateMachine {
     rep.ascentDuration = (timestampMs - this._ascendStartAt) / 1000;
     rep.totalDuration = (timestampMs - rep.startTime) / 1000;
 
+    if (this.exerciseConfig) {
+      const completionFailures = evaluateChecks(this.exerciseConfig.checks, {
+        phase: 'completion',
+        state: this.state,
+        metrics: null,
+        repContext: rep,
+        thresholds: this.exerciseConfig.thresholds,
+        orientation: this.orientation,
+      });
+      // Completion checks are evaluated once from the rep's already-
+      // settled summary — no consecutive-frame debounce needed, unlike
+      // the per-frame checks fed through update() above.
+      for (const failure of completionFailures) {
+        this.errorTracker.confirmDirectly(failure);
+      }
+
+      rep.errors = this.errorTracker.getConfirmedErrors();
+      rep.valid = !rep.errors.some((error) => error.severity === 'critical');
+    }
+
     this.repCount += 1;
+    if (rep.valid) this.validReps += 1;
     this.reps.push(rep);
     this.currentRep = null;
     this._descendStartAt = null;

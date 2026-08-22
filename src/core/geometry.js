@@ -59,3 +59,15 @@ export function distance(a, b) {
 export function midpoint(a, b) {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
+
+// How far point p has drifted horizontally from the straight line a->b,
+// measured at p's own y-height (i.e. find where the line crosses that y
+// level, then compare x). Positive means p is to the right of the line,
+// negative means left. Used for e.g. checking whether a knee has drifted
+// sideways off the hip-ankle line.
+export function horizontalDeviationFromLine(a, b, p) {
+  if (a.y === b.y) return p.x - a.x; // degenerate: line has no vertical extent
+  const t = (p.y - a.y) / (b.y - a.y);
+  const lineXAtP = a.x + t * (b.x - a.x);
+  return p.x - lineXAtP;
+}

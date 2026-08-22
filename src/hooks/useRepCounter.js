@@ -8,17 +8,24 @@ export function useRepCounter() {
   const [machine] = useState(() => new RepStateMachine());
 
   const [state, setState] = useState(machine.state);
-  const [repCount, setRepCount] = useState(machine.repCount);
+  const [totalAttempts, setTotalAttempts] = useState(machine.repCount);
+  const [validReps, setValidReps] = useState(machine.validReps);
   const [reps, setReps] = useState([]);
+  const [activeErrors, setActiveErrors] = useState([]);
+  const [orientation, setOrientationState] = useState(machine.orientation);
 
   const update = (metrics, timestampMs) => {
     const result = machine.update(metrics, timestampMs);
 
     // React skips a re-render when a state setter receives the same
     // value as before (Object.is comparison), so calling these every
-    // frame is safe — only an actual state/repCount change triggers work.
+    // frame is safe — only an actual change triggers work. activeErrors
+    // is a new array each frame, so it always re-renders while any error
+    // is active; that's the point (it's a live "right now" display).
     setState(result.state);
-    setRepCount(result.repCount);
+    setTotalAttempts(result.totalAttempts);
+    setValidReps(result.validReps);
+    setActiveErrors(result.activeErrors);
     if (result.justCompletedRep) {
       setReps((prev) => [...prev, result.justCompletedRep]);
     }
@@ -29,9 +36,16 @@ export function useRepCounter() {
   const reset = () => {
     machine.reset();
     setState(machine.state);
-    setRepCount(machine.repCount);
+    setTotalAttempts(machine.repCount);
+    setValidReps(machine.validReps);
     setReps([]);
+    setActiveErrors([]);
   };
 
-  return { state, repCount, reps, update, reset };
+  const setOrientation = (next) => {
+    machine.setOrientation(next);
+    setOrientationState(next);
+  };
+
+  return { state, totalAttempts, validReps, reps, activeErrors, orientation, update, reset, setOrientation };
 }
