@@ -1,0 +1,42 @@
+.rep-counter-overlay {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.5rem 1rem;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border-radius: 8px;
+}
+
+.rep-count {
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.rep-state {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  opacity: 0.85;
+}
+
+.rep-reset-button {
+  margin-top: 0.35rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  background: transparent;
+  color: #fff;
+}
+
+.rep-reset-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}

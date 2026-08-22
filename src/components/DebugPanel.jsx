@@ -19,9 +19,10 @@ const ROWS = [
   ['Confidence', 'confidence'],
 ];
 
-// Live readout of squat metrics for verifying the angle engine. Toggle
-// with 'd'. Purely presentational — all math happens in core/.
-function DebugPanel({ metrics }) {
+// Live readout of squat metrics + completed reps, for verifying the
+// angle engine and rep state machine. Toggle with 'd'. Purely
+// presentational — all math happens in core/.
+function DebugPanel({ metrics, reps = [] }) {
   return (
     <div className="debug-panel">
       <div className="debug-panel-title">Debug (d to toggle)</div>
@@ -39,6 +40,35 @@ function DebugPanel({ metrics }) {
             ))}
           </tbody>
         </table>
+      )}
+
+      <div className="debug-panel-title">Reps ({reps.length})</div>
+
+      {reps.length === 0 ? (
+        <div className="debug-panel-warning">No completed reps yet</div>
+      ) : (
+        <div className="debug-panel-reps">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Min knee</th>
+                <th>Max torso</th>
+                <th>Total (s)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...reps].reverse().map((rep) => (
+                <tr key={rep.repNumber}>
+                  <td>{rep.repNumber}</td>
+                  <td>{round(rep.minKneeAngle)}</td>
+                  <td>{round(rep.maxTorsoAngle)}</td>
+                  <td>{round(rep.totalDuration)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

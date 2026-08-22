@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import './CameraView.css';
 import { usePoseDetection } from '../hooks/usePoseDetection';
+import { useRepCounter } from '../hooks/useRepCounter';
 import { drawSkeleton, drawLandmarks } from '../core/drawing';
 import { LandmarkSmoother } from '../core/smoothing';
 import { getSquatMetrics } from '../core/exercises/squat';
 import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
+import RepCounterOverlay from './RepCounterOverlay';
 
 const FPS_WINDOW_SIZE = 30;
 
@@ -28,6 +30,7 @@ function CameraView() {
   const showDebugRef = useRef(false);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
+  const repCounter = useRepCounter();
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -151,6 +154,8 @@ function CameraView() {
       // each filter's internal clock consistent frame to frame.
       const smoothedLandmarks = smoother.smooth(rawLandmarks, performance.now());
 
+      let metrics = null;
+
       if (smoothedLandmarks && smoothedLandmarks.length > 0) {
         // ---- MIRROR FIX (the only place this happens) ----
         // The <canvas> has no CSS mirroring (only the <video> does), so
@@ -168,14 +173,16 @@ function CameraView() {
         drawLandmarks(ctx, mirroredLandmarks, canvas.width, canvas.height);
         setDetected(true);
 
-        if (showDebugRef.current) {
-          const aspectRatio = canvas.width / canvas.height;
-          setDebugMetrics(getSquatMetrics(smoothedLandmarks, aspectRatio));
-        }
+        metrics = getSquatMetrics(smoothedLandmarks, canvas.width / canvas.height);
       } else {
         setDetected(false);
-        if (showDebugRef.current) setDebugMetrics(null);
       }
+
+      // Fed every frame — including null metrics — so the state machine's
+      // "abandon a rep if metrics go missing for too long" timer can run
+      // even while no pose is detected.
+      repCounter.update(metrics, now);
+      if (showDebugRef.current) setDebugMetrics(metrics);
 
       rafIdRef.current = requestAnimationFrame(loop);
     };
@@ -185,6 +192,10 @@ function CameraView() {
     return () => {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
     };
+    // repCounter is intentionally omitted: it's a new object every render,
+    // and depending on it would tear down/rebuild the smoother (and its
+    // filter state) on every render instead of just on camera/model changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, landmarker]);
 
   if (status === 'denied') {
@@ -226,7 +237,11 @@ function CameraView() {
 
         {status === 'ready' && <StatsOverlay fps={fps} detected={detected} />}
 
-        {status === 'ready' && showDebug && <DebugPanel metrics={debugMetrics} />}
+        {status === 'ready' && (
+          <RepCounterOverlay repCount={repCounter.repCount} state={repCounter.state} onReset={repCounter.reset} />
+        )}
+
+        {status === 'ready' && showDebug && <DebugPanel metrics={debugMetrics} reps={repCounter.reps} />}
 
         {status === 'ready' && poseLoading && (
           <div className="camera-overlay-message">Loading pose model...</div>
