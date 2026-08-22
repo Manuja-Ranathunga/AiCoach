@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import './CameraView.css';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { drawSkeleton, drawLandmarks } from '../core/drawing';
+import { LandmarkSmoother } from '../core/smoothing';
+import { getSquatMetrics } from '../core/exercises/squat';
 import StatsOverlay from './StatsOverlay';
+import DebugPanel from './DebugPanel';
 
 const FPS_WINDOW_SIZE = 30;
 
@@ -16,8 +19,28 @@ function CameraView() {
   const [status, setStatus] = useState('loading');
   const [fps, setFps] = useState(0);
   const [detected, setDetected] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+  const [debugMetrics, setDebugMetrics] = useState(null);
+  // Mirrors showDebug for the detection loop below to read without being
+  // a dependency of that effect — depending on it directly would tear
+  // down and recreate the LandmarkSmoother (losing its filter state, so
+  // values would jump) every time 'd' is pressed.
+  const showDebugRef = useRef(false);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'd') {
+        setShowDebug((prev) => {
+          showDebugRef.current = !prev;
+          return !prev;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Keeps canvas.width/height (the actual pixel buffer) in sync with the
   // video's real resolution. This is different from CSS width/height —
@@ -92,6 +115,7 @@ function CameraView() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
+    const smoother = new LandmarkSmoother();
 
     let lastVideoTime = -1;
     let latestResult = null;
@@ -121,15 +145,21 @@ function CameraView() {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const poseLandmarks = latestResult?.landmarks?.[0];
+      const rawLandmarks = latestResult?.landmarks?.[0] ?? null;
+      // Smooth every frame, even when rawLandmarks is null — the smoother
+      // just passes null through, and calling it unconditionally keeps
+      // each filter's internal clock consistent frame to frame.
+      const smoothedLandmarks = smoother.smooth(rawLandmarks, performance.now());
 
-      if (poseLandmarks && poseLandmarks.length > 0) {
+      if (smoothedLandmarks && smoothedLandmarks.length > 0) {
         // ---- MIRROR FIX (the only place this happens) ----
         // The <canvas> has no CSS mirroring (only the <video> does), so
         // MediaPipe's landmarks — given in unmirrored video space — must
         // be flipped horizontally in code to line up with what the user
-        // sees mirrored on screen.
-        const mirroredLandmarks = poseLandmarks.map((point) => ({
+        // sees mirrored on screen. Metrics below use the unmirrored
+        // smoothedLandmarks directly, since angles are unaffected by a
+        // horizontal flip and mirroring is purely a display concern.
+        const mirroredLandmarks = smoothedLandmarks.map((point) => ({
           ...point,
           x: 1 - point.x,
         }));
@@ -137,8 +167,14 @@ function CameraView() {
         drawSkeleton(ctx, mirroredLandmarks, canvas.width, canvas.height);
         drawLandmarks(ctx, mirroredLandmarks, canvas.width, canvas.height);
         setDetected(true);
+
+        if (showDebugRef.current) {
+          const aspectRatio = canvas.width / canvas.height;
+          setDebugMetrics(getSquatMetrics(smoothedLandmarks, aspectRatio));
+        }
       } else {
         setDetected(false);
+        if (showDebugRef.current) setDebugMetrics(null);
       }
 
       rafIdRef.current = requestAnimationFrame(loop);
@@ -189,6 +225,8 @@ function CameraView() {
         <canvas ref={canvasRef} className="camera-canvas" />
 
         {status === 'ready' && <StatsOverlay fps={fps} detected={detected} />}
+
+        {status === 'ready' && showDebug && <DebugPanel metrics={debugMetrics} />}
 
         {status === 'ready' && poseLoading && (
           <div className="camera-overlay-message">Loading pose model...</div>
