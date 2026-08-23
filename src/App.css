@@ -18,6 +18,16 @@
   align-items: center;
 }
 
+/* .app-content's align-items: center means flex items shrink-to-fit by
+   default (no cross-axis stretch), and CameraView's root element sizes
+   itself with `width: 100%` — a percentage the browser can't resolve
+   against a parent that's still computing its own width from that same
+   content. This wrapper needs an explicit width to break that circular
+   dependency, or the whole camera-stage silently collapses to 0x0. */
+.app-workout-tab {
+  width: 100%;
+}
+
 .app-hidden {
   display: none;
 }

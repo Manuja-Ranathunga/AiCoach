@@ -20,7 +20,7 @@ function App() {
             workout/session state. Unmounting it every time someone peeks
             at History would tear the camera down and lose that state;
             hiding it with CSS instead keeps it running underneath. */}
-        <div className={tab === 'workout' ? '' : 'app-hidden'}>
+        <div className={`app-workout-tab${tab === 'workout' ? '' : ' app-hidden'}`}>
           <CameraView />
         </div>
 
