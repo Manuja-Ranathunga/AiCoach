@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { speechEngine } from '../core/speechEngine';
+import { speechEngine } from '@ai-coach/ml-engine';
 import './Countdown.css';
 
 const STEPS = ['3', '2', '1', 'Go!'];

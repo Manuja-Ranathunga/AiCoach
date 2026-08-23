@@ -10,8 +10,13 @@ This is an npm workspaces monorepo:
 apps/
   frontend/       # the React + Vite app (@ai-coach/frontend)
 packages/
-  ml-engine/       # placeholder for extracted pose/ML logic (@ai-coach/ml-engine)
+  ml-engine/       # pose/rep/form logic, framework-free (@ai-coach/ml-engine)
+    src/core/       # pure logic — runs headlessly in plain Node
+    src/runtime/     # browser APIs (canvas drawing, speech synthesis), no React
 ```
+
+`@ai-coach/frontend` depends on `@ai-coach/ml-engine` via the workspace and
+imports it only as `@ai-coach/ml-engine` — never via a deep internal path.
 
 `apps/backend` and a `docker-compose.yml` will be added in a later branch.
 
@@ -42,3 +47,9 @@ npm run preview
 ```
 
 All of the above run against `apps/frontend` via npm workspaces.
+
+Run the `@ai-coach/ml-engine` unit tests:
+
+```
+npm test
+```

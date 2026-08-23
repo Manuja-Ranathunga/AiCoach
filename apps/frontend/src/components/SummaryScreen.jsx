@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import './SummaryScreen.css';
-import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
-import { getMistakeBreakdown } from '../core/sessionAnalytics';
+import { SQUAT_CONFIG, getMistakeBreakdown } from '@ai-coach/ml-engine';
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));

@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FeedbackManager, buildFormCueCandidate, numberToWords } from '../core/feedbackManager';
-import { pickPrimaryError } from '../core/feedbackState';
-import { speechEngine } from '../core/speechEngine';
-import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
+import { FeedbackManager, buildFormCueCandidate, numberToWords, pickPrimaryError, speechEngine, SQUAT_CONFIG } from '@ai-coach/ml-engine';
 import * as sessionStore from '../storage/sessionStore';
 
 // Phase 9: settings now live in IndexedDB (via sessionStore) instead of

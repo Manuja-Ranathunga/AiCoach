@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { RepStateMachine } from '../core/repStateMachine';
+import { RepStateMachine } from '@ai-coach/ml-engine';
 
 // Thin React wrapper around RepStateMachine. The machine instance itself
 // is created once (lazy useState initializer) and never replaced; update()

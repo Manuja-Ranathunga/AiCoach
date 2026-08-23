@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import './ProgressScreen.css';
 import * as sessionStore from '../storage/sessionStore';
-import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
+import { SQUAT_CONFIG } from '@ai-coach/ml-engine';
 
 const CHART_WIDTH = 600;
 const CHART_HEIGHT = 180;

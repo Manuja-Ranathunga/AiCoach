@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "npm run dev --workspace=apps/frontend",
     "build": "npm run build --workspace=apps/frontend",
-    "preview": "npm run preview --workspace=apps/frontend"
+    "preview": "npm run preview --workspace=apps/frontend",
+    "test": "npm run test --workspace=packages/ml-engine"
   }
 }

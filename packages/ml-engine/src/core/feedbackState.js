@@ -2,7 +2,7 @@
 // which skeleton segments/joints to recolor, and the single cue message
 // to show. Pure — no React, no canvas calls, just data in, data out.
 
-import { SEVERITY_COLORS, segmentKey } from './drawing';
+import { SEVERITY_COLORS, segmentKey } from '../runtime/drawing';
 
 function severityRank(severity) {
   return severity === 'critical' ? 2 : severity === 'warning' ? 1 : 0;

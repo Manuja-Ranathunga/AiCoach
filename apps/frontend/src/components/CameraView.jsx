@@ -3,13 +3,15 @@ import './CameraView.css';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useRepCounter } from '../hooks/useRepCounter';
 import { useSpeechFeedback } from '../hooks/useSpeechFeedback';
-import { drawSkeleton, drawLandmarks, SEVERITY_COLORS } from '../core/drawing';
-import { LandmarkSmoother } from '../core/smoothing';
-import { getSquatMetrics } from '../core/exercises/squat';
-import { SQUAT_CONFIG } from '../core/exercises/squatConfig';
-import { buildFeedbackState, pickPrimaryError } from '../core/feedbackState';
-import { APP_STATES } from '../core/appStateMachine';
 import {
+  drawSkeleton,
+  drawLandmarks,
+  SEVERITY_COLORS,
+  LandmarkSmoother,
+  getSquatMetrics,
+  SQUAT_CONFIG,
+  buildFeedbackState,
+  pickPrimaryError,
   SETUP_CHECKS_CONFIG,
   checkFullBodyVisible,
   checkWithinFrameBounds,
@@ -17,9 +19,11 @@ import {
   checkLighting,
   runFramingChecks,
   StabilityTracker,
-} from '../core/setupChecks';
-import { OrientationDetector, ORIENTATIONS } from '../core/orientationDetector';
-import { analyzeSet } from '../core/sessionAnalytics';
+  OrientationDetector,
+  ORIENTATIONS,
+  analyzeSet,
+} from '@ai-coach/ml-engine';
+import { APP_STATES } from '../core/appStateMachine';
 import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
 import RepCounterOverlay from './RepCounterOverlay';
