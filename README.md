@@ -1,16 +1,44 @@
-# React + Vite
+# AI Workout Coach
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A Vite + React app that uses MediaPipe pose detection for real-time squat form checking.
 
-Currently, two official plugins are available:
+## Layout
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+This is an npm workspaces monorepo:
 
-## React Compiler
+```
+apps/
+  frontend/       # the React + Vite app (@ai-coach/frontend)
+packages/
+  ml-engine/       # placeholder for extracted pose/ML logic (@ai-coach/ml-engine)
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+`apps/backend` and a `docker-compose.yml` will be added in a later branch.
 
-## Expanding the Oxlint configuration
+## Getting started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Install dependencies once from the repo root:
+
+```
+npm install
+```
+
+Run the dev server:
+
+```
+npm run dev
+```
+
+Build for production:
+
+```
+npm run build
+```
+
+Preview a production build:
+
+```
+npm run preview
+```
+
+All of the above run against `apps/frontend` via npm workspaces.
