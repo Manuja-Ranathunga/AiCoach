@@ -6,6 +6,10 @@ class Settings(BaseSettings):
     env: str = "development"
     database_url: str = "postgresql+psycopg://aicoach:aicoach@localhost:5433/aicoach"
 
+    jwt_secret_key: str = "dev-only-secret-change-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60
+
     class Config:
         env_file = ".env"
 
