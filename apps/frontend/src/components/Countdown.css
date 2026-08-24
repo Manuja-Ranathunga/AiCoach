@@ -6,20 +6,30 @@
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg-overlay);
   pointer-events: none;
 }
 
+.countdown-ghost {
+  position: absolute;
+  width: 260px;
+  height: 260px;
+  color: var(--accent);
+  opacity: 0.15;
+}
+
 .countdown-label {
+  position: relative;
   font-size: 1.25rem;
-  color: #fff;
+  color: var(--text-primary);
   opacity: 0.85;
 }
 
 .countdown-number {
+  position: relative;
   font-size: 8rem;
   font-weight: 800;
-  color: #fff;
+  color: var(--text-primary);
   text-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
   animation: countdown-pop 800ms ease-out;
 }

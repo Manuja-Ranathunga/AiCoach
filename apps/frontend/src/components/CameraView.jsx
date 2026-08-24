@@ -28,6 +28,7 @@ import StatsOverlay from './StatsOverlay';
 import DebugPanel from './DebugPanel';
 import RepCounterOverlay from './RepCounterOverlay';
 import CueBanner from './CueBanner';
+import LiveMetrics from './LiveMetrics';
 import RepFlash from './RepFlash';
 import StateIndicator from './StateIndicator';
 import DepthBar from './DepthBar';
@@ -666,7 +667,7 @@ function CameraView() {
         )}
 
         {status === 'ready' && appState === APP_STATES.COUNTDOWN && (
-          <Countdown onComplete={handleCountdownComplete} resuming={resuming} />
+          <Countdown onComplete={handleCountdownComplete} resuming={resuming} exercise={sessionConfig.exercise} />
         )}
 
         {status === 'ready' && appState === APP_STATES.PAUSED && <RepositionOverlay hint={pauseReason} />}
@@ -678,12 +679,14 @@ function CameraView() {
             <RepCounterOverlay
               validReps={repCounter.validReps}
               totalAttempts={repCounter.totalAttempts}
+              setNumber={sessionSets.length + 1}
               pulseKey={flash && flash.valid ? flash.id : null}
               onReset={handleReset}
               onEndSet={requestEndSet}
             />
 
             <CueBanner message={cue.message} severity={cue.severity} />
+            <LiveMetrics activeErrors={repCounter.activeErrors} exerciseConfig={SQUAT_CONFIG} />
             <RepFlash flash={flash} />
             <DepthBar ref={depthFillRef} markerPercent={DEPTH_MARKER_PERCENT} />
             <StateIndicator state={repCounter.state} orientation={sessionConfig.orientation} activeCheckNames={activeCheckNames} />

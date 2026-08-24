@@ -48,6 +48,12 @@ export const CHECKS = [
     timing: 'completion',
     isApplicable: () => true, // depth works from any camera angle
     evaluate: evaluateDepth,
+    // Which key in an exercise config's `thresholds` this check reads,
+    // and how to display its value — metadata for UI consumers (e.g. the
+    // live metrics panel) that need to show "value vs. target" without
+    // hardcoding a per-check lookup.
+    thresholdKey: 'depthMaxKneeAngle',
+    unit: '°',
   },
   {
     id: 'knee_valgus',
@@ -59,6 +65,8 @@ export const CHECKS = [
     // at the front of the body. Real detection lands in Phase 7.
     isApplicable: (orientation) => orientation === 'front',
     evaluate: evaluateKneeValgus,
+    thresholdKey: 'valgusToleranceRatio',
+    unit: '',
   },
   {
     id: 'excessive_lean',
@@ -70,6 +78,8 @@ export const CHECKS = [
     // in Phase 7.
     isApplicable: (orientation) => orientation === 'side',
     evaluate: evaluateTorsoLean,
+    thresholdKey: 'maxTorsoAngle',
+    unit: '°',
   },
 ];
 
