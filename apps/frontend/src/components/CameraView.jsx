@@ -122,11 +122,18 @@ function CameraView() {
   // in the loop below).
   const pauseSinceRef = useRef(null);
   const resumeOkSinceRef = useRef(null);
-  // Tracks how long the person has been standing with no rep in progress,
-  // for the 20s auto-end. Set numbers are a plain counter rather than
-  // derived from sessionSets.length so finalizeSet doesn't need to read
-  // that state back (see the comment on finalizeSet below).
-  const idleStandingSinceRef = useRef(null);
+  // Tracks how long it's been since the person was last actively mid-rep
+  // with good framing — covers standing idle between reps, AND not being
+  // visible/framed at all (walked out of frame, camera blocked, etc.).
+  // Deliberately one clock spanning ACTIVE and PAUSED (see both branches
+  // in the loop below): walking out of frame first pauses the set after
+  // PAUSE_THRESHOLD_MS without resetting this clock, so if the person
+  // never comes back the set still auto-ends via the configured idle
+  // timeout instead of staying paused forever.
+  const inactiveSinceRef = useRef(null);
+  // Set numbers are a plain counter rather than derived from
+  // sessionSets.length so finalizeSet doesn't need to read that state
+  // back (see the comment on finalizeSet below).
   const setCounterRef = useRef(0);
   // Phase 9 persistence bookkeeping — refs (not state) because they're
   // read from inside the detection loop's stale effect closure the same
@@ -244,13 +251,17 @@ function CameraView() {
     persistSession(nextSets, false);
   };
 
-  // Entry point for the "End Set" button, the 20s idle auto-end, and the
-  // target-reached auto-end. A too-short set is probably a mis-trigger, so
-  // confirm before discarding it instead of silently producing a
-  // near-empty summary — applies uniformly regardless of reason.
+  // Entry point for the "End Set" button, the inactivity auto-end, and the
+  // target-reached auto-end. A too-short manual/target-reached end is
+  // probably a mis-trigger, so confirm before discarding it instead of
+  // silently producing a near-empty summary. 'timeout' skips that gate:
+  // it can fire while PAUSED (the person walked out of frame and never
+  // came back), where the confirm dialog isn't even rendered — and
+  // there's nobody there to answer it regardless — so just close the set
+  // with whatever reps it has.
   const requestEndSet = (reason) => {
     const reps = repCounter.getReps();
-    if (reps.length < MIN_REPS_TO_SUMMARIZE) {
+    if (reason !== 'timeout' && reps.length < MIN_REPS_TO_SUMMARIZE) {
       setPendingDiscardConfirm(true);
       return;
     }
@@ -481,24 +492,28 @@ function CameraView() {
 
         if (showDebugRef.current) setDebugMetrics(metrics);
 
-        // Auto-end: no rep in progress, just standing, for a while — the
-        // person has likely finished without pressing "End Set". Threshold
-        // is configurable (see idleTimeoutMsRef's comment above).
-        if (result.state === 'STANDING') {
-          if (idleStandingSinceRef.current === null) idleStandingSinceRef.current = now;
-          if (now - idleStandingSinceRef.current > idleTimeoutMsRef.current) {
-            idleStandingSinceRef.current = null;
-            requestEndSet('timeout');
-          }
-        } else {
-          idleStandingSinceRef.current = null;
-        }
-
         // Mid-set framing monitor: only the "can we trust this framing"
         // checks apply here — stability doesn't, a squat is supposed to
         // move. Sustained failure (not a single bad frame) pauses the set.
         const framingChecks = runFramingChecks(smoothedLandmarks, SETUP_CHECKS_CONFIG);
         const framingOk = framingChecks.every((check) => check.passed);
+
+        // Auto-end: the person hasn't been actively mid-rep with good
+        // framing for a while — either standing idle between reps, or not
+        // framed/visible at all (about to pause, or already out of frame).
+        // A rep actually in progress with good framing is the only thing
+        // that resets the clock; see the PAUSED branch below for why it
+        // keeps running (not resetting) once the set actually pauses.
+        const isActivelyRepping = framingOk && result.state !== 'STANDING';
+        if (isActivelyRepping) {
+          inactiveSinceRef.current = null;
+        } else {
+          if (inactiveSinceRef.current === null) inactiveSinceRef.current = now;
+          if (now - inactiveSinceRef.current > idleTimeoutMsRef.current) {
+            inactiveSinceRef.current = null;
+            requestEndSet('timeout');
+          }
+        }
 
         if (framingOk) {
           pauseSinceRef.current = null;
@@ -520,6 +535,10 @@ function CameraView() {
         const framingOk = framingChecks.every((check) => check.passed);
 
         if (framingOk) {
+          // Framing recovered — they're active again, so the same clock
+          // ACTIVE was running clears here too, before the auto-resume
+          // countdown starts.
+          inactiveSinceRef.current = null;
           if (resumeOkSinceRef.current === null) resumeOkSinceRef.current = now;
           if (now - resumeOkSinceRef.current > RESUME_STABLE_MS) {
             resumeOkSinceRef.current = null;
@@ -532,6 +551,15 @@ function CameraView() {
           const hint = failing?.hint ?? 'Reposition';
           setPauseReason(hint);
           speech.announceSetupHint(hint);
+
+          // Still not framed — keep the same clock ACTIVE started running
+          // (never resetting it here) so a person who never comes back
+          // gets the set auto-ended instead of paused indefinitely.
+          if (inactiveSinceRef.current === null) inactiveSinceRef.current = now;
+          if (now - inactiveSinceRef.current > idleTimeoutMsRef.current) {
+            inactiveSinceRef.current = null;
+            requestEndSet('timeout');
+          }
         }
       }
       // COUNTDOWN: nothing to compute here — Countdown.jsx drives its own
