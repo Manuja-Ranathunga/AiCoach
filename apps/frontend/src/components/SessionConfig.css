@@ -1,4 +1,4 @@
-.target-reps-setup {
+.session-config {
   position: absolute;
   inset: 0;
   display: flex;
@@ -6,7 +6,7 @@
   justify-content: center;
 }
 
-.target-reps-panel {
+.session-config-panel {
   width: 100%;
   max-width: 360px;
   padding: 1.25rem 1.5rem;
@@ -16,35 +16,61 @@
   text-align: center;
 }
 
-.target-reps-panel h2 {
-  margin: 0 0 0.5rem;
+.session-config-panel h2 {
+  margin: 0 0 1rem;
   font-size: 1.2rem;
 }
 
-.target-reps-detail {
-  margin: 0 0 1rem;
-  font-size: 0.85rem;
+.session-config-field {
+  display: block;
+  margin-bottom: 1.1rem;
+  text-align: left;
+}
+
+.session-config-label {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.session-config-detail {
+  display: block;
+  margin: 0.15rem 0 0.5rem;
+  font-size: 0.78rem;
   opacity: 0.7;
 }
 
-.target-reps-input {
+.session-config-input,
+.session-config-select {
   width: 100%;
   padding: 0.6rem 0.75rem;
-  margin-bottom: 1rem;
-  font-size: 1.5rem;
-  text-align: center;
+  font-size: 1.1rem;
   color: #fff;
   background: rgba(255, 255, 255, 0.08);
   border: 2px solid rgba(255, 255, 255, 0.3);
   border-radius: 8px;
 }
 
-.target-reps-nav {
-  display: flex;
-  justify-content: center;
+.session-config-input {
+  text-align: center;
+  font-size: 1.5rem;
 }
 
-.target-reps-primary-button {
+.session-config-select {
+  cursor: pointer;
+}
+
+.session-config-select option {
+  color: #000;
+}
+
+.session-config-nav {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+.session-config-primary-button {
   padding: 0.6rem 1.25rem;
   font-size: 0.95rem;
   font-weight: 600;

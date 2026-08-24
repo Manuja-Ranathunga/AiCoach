@@ -33,7 +33,7 @@ import StateIndicator from './StateIndicator';
 import DepthBar from './DepthBar';
 import VoiceSettings from './VoiceSettings';
 import SetupFlow from './SetupFlow';
-import TargetRepsSetup from './TargetRepsSetup';
+import SessionConfig from './SessionConfig';
 import Countdown from './Countdown';
 import RepositionOverlay from './RepositionOverlay';
 import SummaryScreen from './SummaryScreen';
@@ -42,6 +42,7 @@ import ResumeSessionPrompt from './ResumeSessionPrompt';
 import StorageWarningBanner from './StorageWarningBanner';
 import * as sessionStore from '../storage/sessionStore';
 import { DEFAULT_TARGET_REPS, hasReachedTarget } from '../core/targetReps';
+import { DEFAULT_COUNTDOWN_SECONDS, DEFAULT_IDLE_TIMEOUT_MS } from '../core/sessionOptions';
 
 const FPS_WINDOW_SIZE = 30;
 const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity: null };
@@ -53,9 +54,6 @@ const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity:
 // visibly back in position.
 const PAUSE_THRESHOLD_MS = 2000;
 const RESUME_STABLE_MS = 800;
-// How long standing with no rep in progress auto-ends a set — a real
-// break, not one long pause between reps.
-const AUTO_END_IDLE_MS = 20000;
 // Below this many reps, ending is probably a mis-trigger (accidental
 // button press, or the idle timer firing before a real attempt) rather
 // than a real set worth a summary — see requestEndSet/DiscardConfirm.
@@ -141,12 +139,16 @@ function CameraView() {
   const sessionConfigRef = useRef({ exercise: 'squat', orientation: 'front' }); // mirrors sessionConfig state
   const currentSetStartedAtRef = useRef(null); // wall-clock start of the set in progress (see handleCountdownComplete)
   const storageWarnedRef = useRef(false);
-  // The configured target for the set about to start (or in progress).
-  // Read from inside the detection loop's stale closure the same way
-  // sessionConfigRef is (see the target-reached check below), and doubles
-  // as the default TargetRepsSetup pre-fills next time ("New Set" reuses
-  // the last-used target instead of asking with no default).
+  // The configured target/countdown-length/idle-timeout for the set about
+  // to start (or in progress) — set from the CONFIGURING step (see
+  // SessionConfig.jsx). targetRepsRef and idleTimeoutMsRef are read from
+  // inside the detection loop's stale closure the same way sessionConfigRef
+  // is (see the target-reached check and the idle auto-end below); all
+  // three double as the defaults SessionConfig pre-fills next time ("New
+  // Set" reuses the last-used values instead of asking with no default).
   const targetRepsRef = useRef(DEFAULT_TARGET_REPS);
+  const countdownSecondsRef = useRef(DEFAULT_COUNTDOWN_SECONDS);
+  const idleTimeoutMsRef = useRef(DEFAULT_IDLE_TIMEOUT_MS);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
@@ -194,7 +196,7 @@ function CameraView() {
   // Turns the machine's live rep array into a finalized set record and
   // moves to SUMMARY. Defined here (not down with handleReset etc.)
   // because, like transitionTo, it's called directly from inside the
-  // detection loop's stale effect closure (the 20s idle auto-end below) —
+  // detection loop's stale effect closure (the idle auto-end below) —
   // safe because everything it touches is stable across renders:
   // repCounter.getReps()/reset() delegate to the never-replaced
   // RepStateMachine instance, setSessionSets/setCurrentSetRecord are
@@ -480,10 +482,11 @@ function CameraView() {
         if (showDebugRef.current) setDebugMetrics(metrics);
 
         // Auto-end: no rep in progress, just standing, for a while — the
-        // person has likely finished without pressing "End Set".
+        // person has likely finished without pressing "End Set". Threshold
+        // is configurable (see idleTimeoutMsRef's comment above).
         if (result.state === 'STANDING') {
           if (idleStandingSinceRef.current === null) idleStandingSinceRef.current = now;
-          if (now - idleStandingSinceRef.current > AUTO_END_IDLE_MS) {
+          if (now - idleStandingSinceRef.current > idleTimeoutMsRef.current) {
             idleStandingSinceRef.current = null;
             requestEndSet('timeout');
           }
@@ -597,8 +600,10 @@ function CameraView() {
     transitionTo(APP_STATES.CONFIGURING);
   };
 
-  const handleTargetConfirm = (target) => {
-    targetRepsRef.current = target;
+  const handleConfigConfirm = (config) => {
+    targetRepsRef.current = config.targetReps;
+    countdownSecondsRef.current = config.countdownSeconds;
+    idleTimeoutMsRef.current = config.idleTimeoutMs;
     transitionTo(APP_STATES.COUNTDOWN);
   };
 
@@ -620,8 +625,8 @@ function CameraView() {
   };
 
   // Alignment was already confirmed once this session to get here, so
-  // skip straight to picking a target instead of the full SetupFlow —
-  // TargetRepsSetup pre-fills with targetRepsRef's last-used value.
+  // skip straight to picking a target/countdown/timeout instead of the
+  // full SetupFlow — SessionConfig pre-fills with the last-used values.
   const handleNewSet = () => {
     repCounter.reset();
     speech.reset();
@@ -694,11 +699,18 @@ function CameraView() {
         )}
 
         {status === 'ready' && appState === APP_STATES.CONFIGURING && (
-          <TargetRepsSetup defaultTarget={targetRepsRef.current} onConfirm={handleTargetConfirm} />
+          <SessionConfig
+            defaults={{
+              targetReps: targetRepsRef.current,
+              countdownSeconds: countdownSecondsRef.current,
+              idleTimeoutMs: idleTimeoutMsRef.current,
+            }}
+            onConfirm={handleConfigConfirm}
+          />
         )}
 
         {status === 'ready' && appState === APP_STATES.COUNTDOWN && (
-          <Countdown onComplete={handleCountdownComplete} resuming={resuming} />
+          <Countdown onComplete={handleCountdownComplete} resuming={resuming} seconds={countdownSecondsRef.current} />
         )}
 
         {status === 'ready' && appState === APP_STATES.PAUSED && <RepositionOverlay hint={pauseReason} />}
