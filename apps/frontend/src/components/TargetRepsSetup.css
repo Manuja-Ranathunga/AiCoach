@@ -1,0 +1,56 @@
+.target-reps-setup {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.target-reps-panel {
+  width: 100%;
+  max-width: 360px;
+  padding: 1.25rem 1.5rem;
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 12px;
+  color: #fff;
+  text-align: center;
+}
+
+.target-reps-panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.target-reps-detail {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.target-reps-input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+  text-align: center;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+}
+
+.target-reps-nav {
+  display: flex;
+  justify-content: center;
+}
+
+.target-reps-primary-button {
+  padding: 0.6rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-good, #22c55e);
+  color: #0a0a0a;
+}

@@ -33,6 +33,7 @@ import StateIndicator from './StateIndicator';
 import DepthBar from './DepthBar';
 import VoiceSettings from './VoiceSettings';
 import SetupFlow from './SetupFlow';
+import TargetRepsSetup from './TargetRepsSetup';
 import Countdown from './Countdown';
 import RepositionOverlay from './RepositionOverlay';
 import SummaryScreen from './SummaryScreen';
@@ -40,6 +41,7 @@ import DiscardConfirm from './DiscardConfirm';
 import ResumeSessionPrompt from './ResumeSessionPrompt';
 import StorageWarningBanner from './StorageWarningBanner';
 import * as sessionStore from '../storage/sessionStore';
+import { DEFAULT_TARGET_REPS, hasReachedTarget } from '../core/targetReps';
 
 const FPS_WINDOW_SIZE = 30;
 const EMPTY_FEEDBACK = { primaryId: null, primaryMessage: null, primarySeverity: null };
@@ -139,6 +141,12 @@ function CameraView() {
   const sessionConfigRef = useRef({ exercise: 'squat', orientation: 'front' }); // mirrors sessionConfig state
   const currentSetStartedAtRef = useRef(null); // wall-clock start of the set in progress (see handleCountdownComplete)
   const storageWarnedRef = useRef(false);
+  // The configured target for the set about to start (or in progress).
+  // Read from inside the detection loop's stale closure the same way
+  // sessionConfigRef is (see the target-reached check below), and doubles
+  // as the default TargetRepsSetup pre-fills next time ("New Set" reuses
+  // the last-used target instead of asking with no default).
+  const targetRepsRef = useRef(DEFAULT_TARGET_REPS);
 
   const { landmarker, isLoading: poseLoading, error: poseError } = usePoseDetection();
   const repCounter = useRepCounter();
@@ -192,8 +200,12 @@ function CameraView() {
   // RepStateMachine instance, setSessionSets/setCurrentSetRecord are
   // React's stable setState functions, and every ref (setCounterRef,
   // sessionIdRef, sessionConfigRef, sessionSetsRef,
-  // currentSetStartedAtRef) is, well, a ref.
-  const finalizeSet = (reps) => {
+  // currentSetStartedAtRef, targetRepsRef) is, well, a ref.
+  //
+  // endReason is 'manual' (End Set button), 'timeout' (idle auto-end), or
+  // 'target_reached' (valid reps hit the configured target) — see
+  // requestEndSet's callers.
+  const finalizeSet = (reps, endReason) => {
     setCounterRef.current += 1;
     const analytics = analyzeSet(reps);
     const validRepsCount = reps.filter((rep) => rep.valid).length;
@@ -209,6 +221,8 @@ function CameraView() {
       reps,
       validReps: validRepsCount,
       totalAttempts: reps.length,
+      targetReps: targetRepsRef.current,
+      endReason,
       analytics,
       completedAt: now,
     };
@@ -228,16 +242,17 @@ function CameraView() {
     persistSession(nextSets, false);
   };
 
-  // Entry point for both the "End Set" button and the 20s idle auto-end.
-  // A too-short set is probably a mis-trigger, so confirm before
-  // discarding it instead of silently producing a near-empty summary.
-  const requestEndSet = () => {
+  // Entry point for the "End Set" button, the 20s idle auto-end, and the
+  // target-reached auto-end. A too-short set is probably a mis-trigger, so
+  // confirm before discarding it instead of silently producing a
+  // near-empty summary — applies uniformly regardless of reason.
+  const requestEndSet = (reason) => {
     const reps = repCounter.getReps();
     if (reps.length < MIN_REPS_TO_SUMMARIZE) {
       setPendingDiscardConfirm(true);
       return;
     }
-    finalizeSet(reps);
+    finalizeSet(reps, reason);
   };
 
   // Colors are defined once in core/drawing.js; publish them as CSS
@@ -453,6 +468,13 @@ function CameraView() {
           const failure = rep.valid ? null : pickPrimaryError(rep.errors, SQUAT_CONFIG.errorPriority);
           setFlash({ id: `${rep.repNumber}-${rep.endTime}`, valid: rep.valid, reason: failure?.message ?? null });
           speech.announceRep(result.state, rep, result.validReps);
+
+          // Auto-end: the configured target was just hit. Checked here
+          // (not every frame) since validReps only changes on rep
+          // completion.
+          if (hasReachedTarget(result.validReps, targetRepsRef.current)) {
+            requestEndSet('target_reached');
+          }
         }
 
         if (showDebugRef.current) setDebugMetrics(metrics);
@@ -463,7 +485,7 @@ function CameraView() {
           if (idleStandingSinceRef.current === null) idleStandingSinceRef.current = now;
           if (now - idleStandingSinceRef.current > AUTO_END_IDLE_MS) {
             idleStandingSinceRef.current = null;
-            requestEndSet();
+            requestEndSet('timeout');
           }
         } else {
           idleStandingSinceRef.current = null;
@@ -572,6 +594,11 @@ function CameraView() {
     sessionConfigRef.current = next; // see the comment on finalizeSet for why this needs a ref mirror
     setSessionConfig(next);
     setResuming(false);
+    transitionTo(APP_STATES.CONFIGURING);
+  };
+
+  const handleTargetConfirm = (target) => {
+    targetRepsRef.current = target;
     transitionTo(APP_STATES.COUNTDOWN);
   };
 
@@ -593,13 +620,14 @@ function CameraView() {
   };
 
   // Alignment was already confirmed once this session to get here, so
-  // skip straight to a countdown instead of the full SetupFlow.
+  // skip straight to picking a target instead of the full SetupFlow —
+  // TargetRepsSetup pre-fills with targetRepsRef's last-used value.
   const handleNewSet = () => {
     repCounter.reset();
     speech.reset();
     setCurrentSetRecord(null);
     setResuming(false);
-    transitionTo(APP_STATES.COUNTDOWN);
+    transitionTo(APP_STATES.CONFIGURING);
   };
 
   const handleDone = () => {
@@ -665,6 +693,10 @@ function CameraView() {
           />
         )}
 
+        {status === 'ready' && appState === APP_STATES.CONFIGURING && (
+          <TargetRepsSetup defaultTarget={targetRepsRef.current} onConfirm={handleTargetConfirm} />
+        )}
+
         {status === 'ready' && appState === APP_STATES.COUNTDOWN && (
           <Countdown onComplete={handleCountdownComplete} resuming={resuming} />
         )}
@@ -680,7 +712,7 @@ function CameraView() {
               totalAttempts={repCounter.totalAttempts}
               pulseKey={flash && flash.valid ? flash.id : null}
               onReset={handleReset}
-              onEndSet={requestEndSet}
+              onEndSet={() => requestEndSet('manual')}
             />
 
             <CueBanner message={cue.message} severity={cue.severity} />
