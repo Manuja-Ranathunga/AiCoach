@@ -18,7 +18,7 @@ copy .env.example .env       # Windows
 
 docker compose up -d         # starts Postgres on localhost:5433
 alembic upgrade head         # creates users/exercises tables
-python -m app.seed           # seeds the "Squat" exercise
+python -m app.seed           # seeds the exercise catalog (6 exercises)
 
 uvicorn app.main:app --reload --port 8000
 ```
@@ -57,3 +57,16 @@ Signup/login/logout are rate-limited to 5 requests/minute per IP; a 6th request 
 `GET /auth/me` is a throwaway route added only to prove the protected-route dependency works — safe to remove once real endpoints exist.
 
 **Production note**: `JWT_SECRET_KEY` defaults to a dev-only value in `app/config.py`. Set a real secret via `.env` (or the environment) before deploying anywhere real.
+
+## Running tests
+
+Tests need the dev Postgres container running (`docker compose up -d`) and the exercise catalog seeded (`python -m app.seed`) — they run against the same dev database, but every test runs inside a transaction that's rolled back afterward, so nothing is ever actually persisted.
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+For a verbose run: `pytest -v`.
+
+Rate limiting is disabled automatically during tests (see `tests/conftest.py`), so hitting `/auth/signup` or `/auth/login` repeatedly across the suite won't trip the 429 limit.
