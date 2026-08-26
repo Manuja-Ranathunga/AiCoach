@@ -47,6 +47,7 @@ export {
   checkLighting,
   StabilityTracker,
   runFramingChecks,
+  aggregateConfidence,
 } from './core/setupChecks.js';
 
 export { ORIENTATIONS, ORIENTATION_CONFIG, OrientationDetector } from './core/orientationDetector.js';
@@ -73,5 +74,7 @@ export { SQUAT_CONFIG } from './core/exercises/squatConfig.js';
 // ---------------------------------------------------------------------
 
 export { POSE_CONNECTIONS, SEVERITY_COLORS, segmentKey, drawSkeleton, drawLandmarks } from './runtime/drawing.js';
+
+export { getSeverityColor, getSeverityLabel } from './runtime/severity.js';
 
 export { speechEngine } from './runtime/speechEngine.js';

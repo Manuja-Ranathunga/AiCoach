@@ -6,7 +6,7 @@
   max-width: 1280px;
   margin: 0 auto;
   padding: 0 1rem 2rem;
-  color: #eee;
+  color: var(--text-primary);
 }
 
 .history-empty {
@@ -31,9 +31,9 @@
 .history-filters select,
 .history-filters input {
   padding: 0.4rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: inherit;
 }
 
@@ -52,9 +52,9 @@
 }
 
 .history-row {
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
   overflow: hidden;
 }
 
@@ -73,7 +73,7 @@
 }
 
 .history-row-summary:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-surface-raised);
 }
 
 .history-row-main {
@@ -121,14 +121,14 @@
   flex-direction: column;
   height: 640px;
   max-height: 80vh;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .history-row-detail-header {
   display: flex;
   justify-content: flex-end;
   padding: 0.6rem 1rem;
-  background: rgba(10, 10, 10, 0.97);
+  background: var(--bg-app);
 }
 
 .history-row-detail-body {

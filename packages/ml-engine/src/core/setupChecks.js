@@ -44,20 +44,35 @@ export const SETUP_CHECKS_CONFIG = {
   minAverageVisibility: 0.5, // (e) average visibility across required landmarks
 };
 
-const NO_PERSON = (id) => ({ id, passed: false, message: 'No person detected', hint: 'Step into frame' });
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function meanOf(values) {
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+const NO_PERSON = (id) => ({ id, passed: false, confidence: 0, message: 'No person detected', hint: 'Step into frame' });
 
 export function checkFullBodyVisible(landmarks, config = SETUP_CHECKS_CONFIG) {
   const id = 'full_body_visible';
   if (!landmarks) return NO_PERSON(id);
 
-  const allVisible = REQUIRED_LANDMARKS.every((index) => {
+  // Graded per landmark (0 = invisible/missing, 1 = at or above the
+  // visibility floor) rather than a hard boolean, so the calibration ring
+  // can show "almost there" instead of jumping straight from 0 to 100.
+  const ratios = REQUIRED_LANDMARKS.map((index) => {
     const point = landmarks[index];
-    return point && (point.visibility ?? 1) >= config.minVisibility;
+    const visibility = point ? (point.visibility ?? 1) : 0;
+    return clamp(visibility / config.minVisibility, 0, 1);
   });
+  const confidence = Math.round(meanOf(ratios) * 100);
+  const allVisible = ratios.every((ratio) => ratio >= 1);
 
   return {
     id,
     passed: allVisible,
+    confidence,
     message: allVisible ? 'Full body visible' : 'Body not fully visible',
     hint: 'Step back so your whole body is visible',
   };
@@ -71,18 +86,24 @@ export function checkWithinFrameBounds(landmarks, config = SETUP_CHECKS_CONFIG) 
   const leftAnkle = landmarks[LEFT_ANKLE];
   const rightAnkle = landmarks[RIGHT_ANKLE];
   if (!nose || !leftAnkle || !rightAnkle) {
-    return { id, passed: false, message: 'Body not fully visible', hint: 'Step back so your whole body is visible' };
+    return { id, passed: false, confidence: 0, message: 'Body not fully visible', hint: 'Step back so your whole body is visible' };
   }
 
   const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
+  // How much room is left before either edge is crossed; full confidence
+  // once there's twice the margin's worth of breathing room on the
+  // tighter side, zero right at the cutoff line.
+  const topSlack = nose.y - config.frameMargin;
+  const bottomSlack = 1 - config.frameMargin - ankleY;
+  const confidence = Math.round(clamp(Math.min(topSlack, bottomSlack) / (config.frameMargin * 2), 0, 1) * 100);
 
   if (nose.y < config.frameMargin) {
-    return { id, passed: false, message: 'Head cut off at top', hint: 'Move the camera lower' };
+    return { id, passed: false, confidence, message: 'Head cut off at top', hint: 'Move the camera lower' };
   }
   if (ankleY > 1 - config.frameMargin) {
-    return { id, passed: false, message: 'Feet cut off at bottom', hint: 'Step back' };
+    return { id, passed: false, confidence, message: 'Feet cut off at bottom', hint: 'Step back' };
   }
-  return { id, passed: true, message: 'Within frame', hint: '' };
+  return { id, passed: true, confidence, message: 'Within frame', hint: '' };
 }
 
 export function checkBodySize(landmarks, config = SETUP_CHECKS_CONFIG) {
@@ -93,7 +114,7 @@ export function checkBodySize(landmarks, config = SETUP_CHECKS_CONFIG) {
   const leftAnkle = landmarks[LEFT_ANKLE];
   const rightAnkle = landmarks[RIGHT_ANKLE];
   if (!nose || !leftAnkle || !rightAnkle) {
-    return { id, passed: false, message: 'Body not fully visible', hint: 'Step back so your whole body is visible' };
+    return { id, passed: false, confidence: 0, message: 'Body not fully visible', hint: 'Step back so your whole body is visible' };
   }
 
   // Normalized y already runs 0..1 over the frame height, so head-to-ankle
@@ -101,13 +122,19 @@ export function checkBodySize(landmarks, config = SETUP_CHECKS_CONFIG) {
   const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
   const bodyHeightRatio = ankleY - nose.y;
 
+  // Confidence peaks at the midpoint of the acceptable range and falls
+  // off toward either edge, reaching 0 exactly at min/max.
+  const mid = (config.minBodyHeightRatio + config.maxBodyHeightRatio) / 2;
+  const halfRange = (config.maxBodyHeightRatio - config.minBodyHeightRatio) / 2;
+  const confidence = Math.round(clamp(1 - Math.abs(bodyHeightRatio - mid) / halfRange, 0, 1) * 100);
+
   if (bodyHeightRatio < config.minBodyHeightRatio) {
-    return { id, passed: false, message: 'Too far from camera', hint: 'Step closer' };
+    return { id, passed: false, confidence, message: 'Too far from camera', hint: 'Step closer' };
   }
   if (bodyHeightRatio > config.maxBodyHeightRatio) {
-    return { id, passed: false, message: 'Too close to camera', hint: 'Step back' };
+    return { id, passed: false, confidence, message: 'Too close to camera', hint: 'Step back' };
   }
-  return { id, passed: true, message: 'Good distance', hint: '' };
+  return { id, passed: true, confidence, message: 'Good distance', hint: '' };
 }
 
 export function checkLighting(landmarks, config = SETUP_CHECKS_CONFIG) {
@@ -118,12 +145,15 @@ export function checkLighting(landmarks, config = SETUP_CHECKS_CONFIG) {
   for (const index of REQUIRED_LANDMARKS) {
     total += landmarks[index]?.visibility ?? 1;
   }
-  const average = total / REQUIRED_LANDMARKS.length;
+  const averageVisibility = total / REQUIRED_LANDMARKS.length;
+  const passed = averageVisibility >= config.minAverageVisibility;
+  const confidence = Math.round(clamp(averageVisibility / config.minAverageVisibility, 0, 1) * 100);
 
   return {
     id,
-    passed: average >= config.minAverageVisibility,
-    message: average >= config.minAverageVisibility ? 'Good visibility' : 'Low landmark confidence',
+    passed,
+    confidence,
+    message: passed ? 'Good visibility' : 'Low landmark confidence',
     hint: 'Improve lighting, or wear more fitted clothing',
   };
 }
@@ -158,7 +188,7 @@ export class StabilityTracker {
     const positions = STABILITY_LANDMARKS.map((index) => landmarks[index]);
     if (positions.some((point) => !point)) {
       this.history = [];
-      return { id, passed: false, message: 'Body not fully visible', hint: 'Step back so your whole body is visible' };
+      return { id, passed: false, confidence: 0, message: 'Body not fully visible', hint: 'Step back so your whole body is visible' };
     }
 
     this.history.push({ timestampMs, positions });
@@ -168,7 +198,11 @@ export class StabilityTracker {
     const oldest = this.history[0].timestampMs;
     const windowCovered = timestampMs - oldest >= this.config.stabilityWindowMs * 0.9;
     if (!windowCovered) {
-      return { id, passed: false, message: 'Checking stability...', hint: 'Hold still' };
+      // Partial credit while the window is still filling, capped well
+      // below the pass line so an in-progress check never reads as
+      // "confirmed" on the calibration ring.
+      const coverage = clamp((timestampMs - oldest) / this.config.stabilityWindowMs, 0, 1);
+      return { id, passed: false, confidence: Math.round(coverage * 50), message: 'Checking stability...', hint: 'Hold still' };
     }
 
     let totalVariance = 0;
@@ -177,14 +211,27 @@ export class StabilityTracker {
       totalVariance += variance(this.history.map((frame) => frame.positions[i].y));
     }
     const avgVariance = totalVariance / STABILITY_LANDMARKS.length;
+    const passed = avgVariance <= this.config.stabilityMaxVariance;
+    const confidence = Math.round(clamp(1 - avgVariance / this.config.stabilityMaxVariance, 0, 1) * 100);
 
     return {
       id,
-      passed: avgVariance <= this.config.stabilityMaxVariance,
-      message: avgVariance <= this.config.stabilityMaxVariance ? 'Holding still' : 'Still moving',
+      passed,
+      confidence,
+      message: passed ? 'Holding still' : 'Still moving',
       hint: 'Hold still',
     };
   }
+}
+
+// Rolls every individual check's graded confidence into one 0-100 number
+// for a single "how close are we" readout (the calibration ring). Falls
+// back to pass/fail as 100/0 for any check missing a confidence field —
+// keeps this safe for callers passing hand-built objects (e.g. tests).
+export function aggregateConfidence(checks) {
+  if (!checks || checks.length === 0) return 0;
+  const total = checks.reduce((sum, check) => sum + (check.confidence ?? (check.passed ? 100 : 0)), 0);
+  return Math.round(total / checks.length);
 }
 
 // The four checks relevant to mid-set monitoring — "can we still trust

@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import { speechEngine } from '@ai-coach/ml-engine';
+<<<<<<< HEAD
 import { DEFAULT_COUNTDOWN_SECONDS } from '../core/sessionOptions';
+=======
+import ExerciseIcon from './ExerciseIcon';
+>>>>>>> frontend
 import './Countdown.css';
 
 // One real second per number (see the CONFIGURING step's countdown-length
@@ -8,6 +12,7 @@ import './Countdown.css';
 // to actually be a second to match).
 const STEP_DURATION_MS = 1000;
 
+<<<<<<< HEAD
 function buildSteps(seconds) {
   const steps = [];
   for (let n = seconds; n >= 1; n--) steps.push(String(n));
@@ -26,6 +31,20 @@ function buildSteps(seconds) {
 // happened to be mid-sentence when the countdown began.
 function Countdown({ onComplete, resuming = false, seconds = DEFAULT_COUNTDOWN_SECONDS }) {
   const [steps] = useState(() => buildSteps(seconds));
+=======
+function capitalize(id) {
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+// 3-2-1 countdown, voice + visual. Reused both for the initial "Start
+// Set" and for auto-resuming after a mid-set pause (via `resuming`).
+// Speaks directly through speechEngine rather than going through
+// feedbackManager's throttling — a deliberate, rapid, one-shot sequence
+// isn't a "coaching cue" subject to the nagging-prevention rules, and
+// `interrupt: true` + 'critical' priority guarantees it isn't swallowed
+// by whatever cue happened to be mid-sentence when the countdown began.
+function Countdown({ onComplete, resuming = false, exercise = null }) {
+>>>>>>> frontend
   const [stepIndex, setStepIndex] = useState(0);
 
   useEffect(() => {
@@ -49,9 +68,12 @@ function Countdown({ onComplete, resuming = false, seconds = DEFAULT_COUNTDOWN_S
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepIndex]);
 
+  const caption = resuming ? 'Resuming...' : exercise ? `Get ready — ${capitalize(exercise)}` : null;
+
   return (
     <div className="countdown-overlay">
-      {resuming && <div className="countdown-label">Resuming...</div>}
+      {exercise && <ExerciseIcon exercise={exercise} className="countdown-ghost" />}
+      {caption && <div className="countdown-label">{caption}</div>}
       <div key={stepIndex} className="countdown-number">
         {steps[stepIndex]}
       </div>

@@ -1,0 +1,17 @@
+.exercise-icon {
+  width: 100%;
+  height: 100%;
+  color: inherit;
+  overflow: visible;
+}
+
+.exercise-icon line {
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.exercise-icon-joint,
+.exercise-icon-head {
+  fill: currentColor;
+}
