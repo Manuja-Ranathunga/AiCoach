@@ -1,0 +1,34 @@
+:root {
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  --bg: #0b0c0d;
+  --bg-elevated: #101214;
+  --bg-card: #15171a;
+  --bg-input: #1b1e22;
+
+  --text: #edede8;
+  --text-70: rgba(237, 237, 232, 0.7);
+  --text-60: rgba(237, 237, 232, 0.6);
+  --text-55: rgba(237, 237, 232, 0.55);
+  --text-50: rgba(237, 237, 232, 0.5);
+  --text-45: rgba(237, 237, 232, 0.45);
+  --text-40: rgba(237, 237, 232, 0.4);
+  --text-35: rgba(237, 237, 232, 0.35);
+  --text-30: rgba(237, 237, 232, 0.3);
+
+  --border-08: rgba(237, 237, 232, 0.08);
+  --border-10: rgba(237, 237, 232, 0.1);
+  --border-12: rgba(237, 237, 232, 0.12);
+  --border-14: rgba(237, 237, 232, 0.14);
+  --border-18: rgba(237, 237, 232, 0.18);
+  --border-22: rgba(237, 237, 232, 0.22);
+
+  --accent-blue: #4c7cff;
+  --accent-blue-hover: #7c9dff;
+  --accent-green: #5fbf8b;
+  --accent-amber: #e0a458;
+
+  --radius-sm: 2px;
+}
